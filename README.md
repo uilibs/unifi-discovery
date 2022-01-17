@@ -48,7 +48,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <!-- markdownlint-disable -->
 <table>
   <tr>
-    <td align="center"><a href="https://florisvdk.net"><img src="https://avatars.githubusercontent.com/u/16548176?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Floris Van der krieken</b></sub></a><br /><a href="https://github.com/bdraco/unifi-discovery/commits?author=florisvdk" title="Code">💻</a></td>
+    <td align="center"><a href="https://florisvdk.net"><img src="https://avatars.githubusercontent.com/u/16548176?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Floris Van der krieken</b></sub></a><br /><a href="https://github.com/bdraco/unifi-discovery/commits?author=florisvdk" title="Code">💻</a> <a href="#example-florisvdk" title="Examples">💡</a></td>
   </tr>
 </table>
 
