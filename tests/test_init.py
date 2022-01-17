@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from unifi_discovery import (
-    UBNT_REQUEST_PAYLOAD,
     DISCOVERY_PORT,
+    UBNT_REQUEST_PAYLOAD,
     AIOUnifiScanner,
     UnifiDevice,
     UnifiDiscovery,

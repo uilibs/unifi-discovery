@@ -6,7 +6,7 @@ import socket
 import time
 from dataclasses import dataclass
 from struct import unpack
-from typing import Callable, Dict, List, Optional, Tuple, cast
+from typing import Callable, cast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ FIELD_PARSERS = {
     0x01: ("hw_addr", mac_repr, False),
     0x02: (
         "ip_info",
-        lambda data: "%s;%s" % (mac_repr(data[0:6]), ip_repr(data[6:10])),
+        lambda data: f"{mac_repr(data[0:6])};{ip_repr(data[6:10])}",
         True,
     ),
     0x03: ("fw_version", bytes.decode, False),
@@ -76,19 +76,18 @@ def parse_ubnt_response(payload: bytes | None) -> UnifiDevice | None:
 
     if payload is None or len(payload) < 5:
         return None
-    if (
-        payload[0:4] == UBNT_REQUEST_PAYLOAD
-    ):  # Check for a UBNT discovery request (first 4 bytes of the payload should be \x01\x00\x00\x00)
+    if payload[0:4] == UBNT_REQUEST_PAYLOAD:  # Check for a UBNT discovery request
+        # (first 4 bytes of the payload should be \x01\x00\x00\x00)
         return None
-    elif (
-        payload[0:3] == UBNT_V1_SIGNATURE
-    ):  # Check for a valid UBNT discovery reply (first 3 bytes of the payload should be \x01\x00\x00)
+    elif payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
+        # (first 3 bytes of the payload should be \x01\x00\x00)
         fields["signature_version"] = "1"  # this is not always correct
         field_parsers_packet_specific = {**FIELD_PARSERS}
     else:
         return None  # Not a valid UBNT discovery reply, skip to next received packet
 
-    # Walk the reply payload, staring from offset 04 (just after reply signature and payload size).
+    # Walk the reply payload, staring from offset 04
+    # (just after reply signature and payload size).
     # Take into account the payload length in offset 3
     for field_type, field_data in iter_fields(payload[4:], payload[3]):
 
@@ -127,22 +126,22 @@ def create_udp_socket(discovery_port: int) -> socket.socket:
 class UnifiDiscovery(asyncio.DatagramProtocol):
     def __init__(
         self,
-        destination: Tuple[str, int],
-        on_response: Callable[[bytes, Tuple[str, int]], None],
+        destination: tuple[str, int],
+        on_response: Callable[[bytes, tuple[str, int]], None],
     ) -> None:
         self.transport = None
         self.destination = destination
         self.on_response = on_response
 
-    def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Trigger on_response."""
         self.on_response(data, addr)
 
-    def error_received(self, ex: Optional[Exception]) -> None:
+    def error_received(self, ex: Exception | None) -> None:
         """Handle error."""
         _LOGGER.error("UnifiDiscovery error: %s", ex)
 
-    def connection_lost(self, ex: Optional[Exception]) -> None:
+    def connection_lost(self, ex: Exception | None) -> None:
         """Do nothing on connection lost."""
 
 
@@ -150,19 +149,19 @@ class AIOUnifiScanner:
     """A unifi discovery scanner."""
 
     def __init__(self) -> None:
-        self.found_devices: List[UnifiDevice] = []
+        self.found_devices: list[UnifiDevice] = []
 
-    def _destination_from_address(self, address: Optional[str]) -> Tuple[str, int]:
+    def _destination_from_address(self, address: str | None) -> tuple[str, int]:
         if address is None:
             address = "<broadcast>"
         return (address, DISCOVERY_PORT)
 
     def _process_response(
         self,
-        data: Optional[bytes],
-        from_address: Tuple[str, int],
-        address: Optional[str],
-        response_list: Dict[Tuple[str, int], UnifiDevice],
+        data: bytes | None,
+        from_address: tuple[str, int],
+        address: str | None,
+        response_list: dict[tuple[str, int], UnifiDevice],
     ) -> bool:
         """Process a response.
 
@@ -177,7 +176,7 @@ class AIOUnifiScanner:
     async def _async_run_scan(
         self,
         transport: asyncio.DatagramTransport,
-        destination: Tuple[str, int],
+        destination: tuple[str, int],
         timeout: int,
         found_all_future: "asyncio.Future[bool]",
     ) -> None:
@@ -205,15 +204,15 @@ class AIOUnifiScanner:
             remain_time = quit_time - time.monotonic()
 
     async def async_scan(
-        self, timeout: int = 10, address: Optional[str] = None
-    ) -> List[UnifiDevice]:
+        self, timeout: int = 10, address: str | None = None
+    ) -> list[UnifiDevice]:
         """Discover on port 10001."""
         sock = create_udp_socket(DISCOVERY_PORT)
         destination = self._destination_from_address(address)
         found_all_future: asyncio.Future[bool] = asyncio.Future()
-        response_list: Dict[Tuple[str, int], UnifiDevice] = {}
+        response_list: dict[tuple[str, int], UnifiDevice] = {}
 
-        def _on_response(data: bytes, addr: Tuple[str, int]) -> None:
+        def _on_response(data: bytes, addr: tuple[str, int]) -> None:
             _LOGGER.debug("discover: %s <= %s", addr, data)
             if self._process_response(data, addr, address, response_list):
                 found_all_future.set_result(True)
