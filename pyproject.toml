@@ -1,0 +1,67 @@
+[tool.poetry]
+name = "unifi-discovery"
+version = "0.1.0"
+description = "Discover Unifi Devices"
+authors = ["J. Nick Koston <nick@koston.org>"]
+license = "Apache Software License 2.0"
+readme = "README.md"
+repository = "https://github.com/bdraco/unifi-discovery"
+documentation = "https://unifi-discovery.readthedocs.io"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+]
+packages = [
+    { include = "unifi_discovery" },
+]
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/bdraco/unifi-discovery/issues"
+"Changelog" = "https://unifi-discovery.readthedocs.io/changelog.html"
+
+[tool.poetry.dependencies]
+python = "^3.7"
+
+# Documentation Dependencies
+Sphinx = {version = "^4.0.0", optional = true}
+sphinx-rtd-theme = {version = "^1.0.0", optional = true}
+myst-parser = {version = "^0.16.0", optional = true}
+
+[tool.poetry.extras]
+docs = [
+    "myst-parser",
+    "sphinx",
+    "sphinx-rtd-theme",
+]
+
+[tool.poetry.dev-dependencies]
+black = "^21.11b1"
+flake8 = "^4.0.0"
+isort = "^5.10.1"
+pytest = "^6.1.2"
+pytest-cov = "^3.0.0"
+pyupgrade = "^2.29.1"
+tox = "^3.20.1"
+
+[tool.semantic_release]
+branch = "main"
+version_toml = "pyproject.toml:tool.poetry.version"
+version_variable = "unifi_discovery/__init__.py:__version__"
+build_command = "pip install poetry && poetry build"
+
+[tool.pytest.ini_options]
+addopts = "-v -Wdefault --cov=unifi_discovery --cov-report=term-missing:skip-covered"
+
+[tool.coverage.run]
+branch = true
+
+[tool.isort]
+profile = "black"
+known_first_party = ["unifi_discovery", "tests"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
