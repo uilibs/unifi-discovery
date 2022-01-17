@@ -38,6 +38,10 @@ Install this via pip (or your favourite package manager):
 
 `pip install unifi-discovery`
 
+## Example usage
+
+aioscanner.py
+
 ## Contributors ✨
 
 Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
