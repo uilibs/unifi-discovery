@@ -9,7 +9,17 @@
   "imageSize": 80,
   "commit": true,
   "commitConvention": "angular",
-  "contributors": [],
+  "contributors": [
+    {
+      "login": "florisvdk",
+      "name": "Floris Van der krieken",
+      "avatar_url": "https://avatars.githubusercontent.com/u/16548176?v=4",
+      "profile": "https://florisvdk.net",
+      "contributions": [
+        "code"
+      ]
+    }
+  ],
   "contributorsPerLine": 7,
   "skipCi": true
 }
