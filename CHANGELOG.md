@@ -2,6 +2,9 @@
 
 <!--next-version-placeholder-->
 
+## v0.1.2 (2022-01-17)
+
+
 ## v0.1.1 (2022-01-17)
 ### Feature
 * Initial commit ([`930961b`](https://github.com/bdraco/unifi-discovery/commit/930961b9a832bf76e8a1a2b5224cceb24132e067))
