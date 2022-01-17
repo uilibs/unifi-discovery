@@ -44,8 +44,17 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 
 <!-- prettier-ignore-start -->
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
 <!-- markdownlint-disable -->
-<!-- markdownlint-enable -->
+<table>
+  <tr>
+    <td align="center"><a href="https://florisvdk.net"><img src="https://avatars.githubusercontent.com/u/16548176?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Floris Van der krieken</b></sub></a><br /><a href="https://github.com/bdraco/unifi-discovery/commits?author=florisvdk" title="Code">💻</a></td>
+  </tr>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 <!-- prettier-ignore-end -->
 
