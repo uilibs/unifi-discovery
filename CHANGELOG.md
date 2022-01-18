@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.2.0 (2022-01-18)
+### Feature
+* Reuse the address so multiple can run ([`11593e7`](https://github.com/bdraco/unifi-discovery/commit/11593e77dc9262ccabbb1575eff3e80ad07dd310))
+
 ## v0.1.2 (2022-01-17)
 
 

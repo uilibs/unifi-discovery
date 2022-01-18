@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "unifi-discovery"
-version = "0.1.4"
+version = "0.2.0"
 description = "Discover Unifi Devices"
 authors = ["J. Nick Koston <nick@koston.org>"]
 license = "Apache Software License 2.0"
