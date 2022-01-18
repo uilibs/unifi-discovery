@@ -6,14 +6,20 @@ import re
 import socket
 import time
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
 from typing import TYPE_CHECKING, Awaitable, Callable, cast
 
-from aiohttp import ClientResponse, ClientSession, ClientTimeout, TCPConnector
+from aiohttp import (
+    ClientError,
+    ClientResponse,
+    ClientSession,
+    ClientTimeout,
+    TCPConnector,
+)
 
 if TYPE_CHECKING:
     from pyroute2 import IPRoute  # type: ignore
@@ -35,7 +41,7 @@ IGNORE_NETWORKS = (
 )
 
 
-PROBE_PLATFORMS = {"UDMPROSE", "UDMPRO", "UNVR", "UNVR", None}
+PROBE_PLATFORMS = {"UDMPROSE", "UDMPRO", "UNVR", "UNVRPRO", "UCKP", None}
 
 # UBNT discovery packet payload and reply signature
 UBNT_REQUEST_PAYLOAD = b"\x01\x00\x00\x00"
@@ -54,6 +60,10 @@ VALID_MAC_ADDRESS = re.compile("^([0-9A-Fa-f]{1,2}[:-]){5}([0-9A-Fa-f]{1,2})$")
 
 def mac_repr(data):
     return ":".join(("%02x" % b) for b in data)
+
+
+def _format_mac(mac: str) -> str:
+    return ":".join(mac.lower()[i : i + 2] for i in range(0, 12, 2))
 
 
 def ip_repr(data):
@@ -116,6 +126,9 @@ class UnifiDevice:
     model: str | None = None
     signature_version: str | None = None
     services: dict[UnifiService, bool] = field(default_factory=_services_dict)
+    direct_connect_domain: str | None = None
+    is_sso_enabled: bool | None = None
+    is_single_user: bool | None = None
 
 
 def async_get_source_ip(target_ip: str) -> str | None:
@@ -363,38 +376,67 @@ class AIOUnifiScanner:
         self, response_list: dict[str, UnifiDevice]
     ) -> None:
         """Add any missing hardware addresses to the response list."""
-        if any(device.hw_addr is None for device in response_list.values()):
-            arp = ArpSearch()
-            neighbors = await arp.async_get_neighbors()
-            for source, device in response_list.items():
-                if device.hw_addr is None and device.source_ip in neighbors:
-                    response_list[source] = UnifiDevice(
-                        source_ip=device.source_ip,
-                        hw_addr=neighbors[device.source_ip],
-                        ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
-                        services=device.services,
-                    )
+        if not any(device.hw_addr is None for device in response_list.values()):
+            return
+        arp = ArpSearch()
+        neighbors = await arp.async_get_neighbors()
+        for source, device in response_list.items():
+            if device.hw_addr is None and device.source_ip in neighbors:
+                response_list[source] = replace(
+                    device,
+                    hw_addr=neighbors[device.source_ip],
+                    ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
+                )
 
-    async def _probe_services(self, response_list: dict[str, UnifiDevice]) -> None:
+    async def _probe_services_and_system(
+        self, response_list: dict[str, UnifiDevice]
+    ) -> None:
         """Check which services are available and update the services dict."""
         timeout = ClientTimeout(total=5.0)
         async with ClientSession(
-            connector=TCPConnector(verify_ssl=False), timeout=timeout
+            connector=TCPConnector(ssl=False), timeout=timeout
         ) as s:
-            device_tasks: dict[str, Awaitable] = {
-                device.source_ip: s.get(f"https://{device.source_ip}/proxy/protect/api")
-                for device in response_list.values()
-                if device.platform in PROBE_PLATFORMS
-            }
+            device_tasks: dict[str, Awaitable] = {}
+            system_tasks: dict[str, Awaitable] = {}
+            for device in response_list.values():
+                if device.platform in PROBE_PLATFORMS:
+                    source_ip = device.source_ip
+                    device_tasks[source_ip] = s.get(
+                        f"https://{source_ip}/proxy/protect/api"
+                    )
+                    system_tasks[source_ip] = s.get(f"https://{source_ip}/api/system")
             results: list[ClientResponse | Exception] = await asyncio.gather(
-                *device_tasks.values(), return_exceptions=True
+                *(*device_tasks.values(), *system_tasks.values()),
+                return_exceptions=True,
             )
+            device_task_len = len(device_tasks)
             for idx, source_ip in enumerate(device_tasks):
-                response = results[idx]
+                device_response = results[idx]
                 response_list[source_ip].services[UnifiService.Protect] = (
-                    response.status == HTTPStatus.UNAUTHORIZED
-                    if not isinstance(response, Exception)
+                    device_response.status == HTTPStatus.UNAUTHORIZED
+                    if not isinstance(device_response, Exception)
                     else False
+                )
+                system_response = results[idx + device_task_len]
+                if isinstance(system_response, Exception):
+                    continue
+                try:
+                    system = await system_response.json()
+                except (asyncio.TimeoutError, ClientError):
+                    _LOGGER.exception("Failed to get system info for %s", source_ip)
+                    continue
+                if not system:
+                    continue
+                device = response_list[source_ip]
+                short_name = system.get("hardware", {}).get("shortname")
+                response_list[source_ip] = replace(
+                    device,
+                    platform=device.platform or short_name,
+                    hostname=device.hostname or system.get("name").replace(" ", "-"),
+                    hw_addr=device.hw_addr or _format_mac(system.get("mac")),
+                    direct_connect_domain=system.get("directConnectDomain"),
+                    is_sso_enabled=system.get("isSsoEnabled"),
+                    is_single_user=system.get("isSingleUser"),
                 )
 
     async def async_scan(
@@ -428,7 +470,7 @@ class AIOUnifiScanner:
         finally:
             transport.close()
 
-        await self._probe_services(response_list)
+        await self._probe_services_and_system(response_list)
         await self._add_missing_hw_addresses(response_list)
 
         self.found_devices = list(response_list.values())
