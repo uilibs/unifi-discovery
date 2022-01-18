@@ -11,9 +11,9 @@ from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
-from typing import TYPE_CHECKING, Callable, cast
+from typing import TYPE_CHECKING, Awaitable, Callable, cast
 
-from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector
+from aiohttp import ClientResponse, ClientSession, ClientTimeout, TCPConnector
 
 if TYPE_CHECKING:
     from pyroute2 import IPRoute  # type: ignore
@@ -372,6 +372,7 @@ class AIOUnifiScanner:
                         source_ip=device.source_ip,
                         hw_addr=neighbors[device.source_ip],
                         ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
+                        services=device.services,
                     )
 
     async def _probe_services(self, response_list: dict[str, UnifiDevice]) -> None:
@@ -380,18 +381,21 @@ class AIOUnifiScanner:
         async with ClientSession(
             connector=TCPConnector(verify_ssl=False), timeout=timeout
         ) as s:
-            for device in response_list.values():
-                if device.platform in PROBE_PLATFORMS:
-                    response = None
-                    with suppress((asyncio.TimeoutError, ClientError)):
-                        response = await s.get(
-                            f"https://{device.source_ip}/proxy/protect/api"
-                        )
-                    device.services[UnifiService.Protect] = (
-                        response.status == HTTPStatus.UNAUTHORIZED
-                        if response
-                        else False
-                    )
+            device_tasks: dict[str, Awaitable] = {
+                device.source_ip: s.get(f"https://{device.source_ip}/proxy/protect/api")
+                for device in response_list.values()
+                if device.platform in PROBE_PLATFORMS
+            }
+            results: list[ClientResponse | Exception] = await asyncio.gather(
+                *device_tasks.values(), return_exceptions=True
+            )
+            for idx, source_ip in enumerate(device_tasks):
+                response = results[idx]
+                response_list[source_ip].services[UnifiService.Protect] = (
+                    response.status == HTTPStatus.UNAUTHORIZED
+                    if not isinstance(response, Exception)
+                    else False
+                )
 
     async def async_scan(
         self, timeout: int = 31, address: str | None = None
@@ -424,8 +428,8 @@ class AIOUnifiScanner:
         finally:
             transport.close()
 
-        await self._add_missing_hw_addresses(response_list)
         await self._probe_services(response_list)
+        await self._add_missing_hw_addresses(response_list)
 
         self.found_devices = list(response_list.values())
         return self.found_devices
