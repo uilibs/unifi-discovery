@@ -6,13 +6,21 @@ import re
 import socket
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from ipaddress import ip_address, ip_network
 from struct import unpack
 from typing import TYPE_CHECKING, Callable, cast
 
+from aiohttp import ClientError, ClientSession, TCPConnector
+
 if TYPE_CHECKING:
     from pyroute2 import IPRoute
+
+
+class UnifiServices(Enum):
+    Protect = auto()
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +33,8 @@ IGNORE_NETWORKS = (
     ip_network("224.0.0.0/4"),
 )
 
+
+PROBE_PLATFORMS = {"UDMPROSE", "UDMPRO", "UNVR", "UNVR", None}
 
 # UBNT discovery packet payload and reply signature
 UBNT_REQUEST_PAYLOAD = b"\x01\x00\x00\x00"
@@ -84,6 +94,11 @@ FIELD_PARSERS = {
 }
 
 
+def _services_dict():
+    """Create an dict with known services."""
+    return {service: False for service in UnifiServices}
+
+
 @dataclass
 class UnifiDevice:
     """A device discovered."""
@@ -99,6 +114,7 @@ class UnifiDevice:
     platform: str | None = None
     model: str | None = None
     signature_version: str | None = None
+    services: dict[str, bool] = field(default_factory=_services_dict)
 
 
 def async_get_source_ip(target_ip: str) -> str | None:
@@ -342,8 +358,38 @@ class AIOUnifiScanner:
                 return  # found_all
             remain_time = quit_time - time.monotonic()
 
+    async def _add_missing_hw_addresses(
+        self, response_list: dict[str, UnifiDevice]
+    ) -> None:
+        """Add any missing hardware addresses to the response list."""
+        if any(device.hw_addr is None for device in response_list.values()):
+            arp = ArpSearch()
+            neighbors = await arp.async_get_neighbors()
+            for source, device in response_list.items():
+                if device.hw_addr is None and device.source_ip in neighbors:
+                    response_list[source] = UnifiDevice(
+                        source_ip=device.source_ip,
+                        hw_addr=neighbors[device.source_ip],
+                        ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
+                    )
+
+    async def _probe_services(self, response_list: dict[str, UnifiDevice]) -> None:
+        """Check which services are available and update the services dict."""
+        session = ClientSession(connector=TCPConnector(verify_ssl=False))
+        for device in response_list.values():
+            if device.platform in PROBE_PLATFORMS:
+                response = None
+                with suppress(ClientError):
+                    response = await session.get(
+                        f"https://{device.source_ip}/proxy/protect/api"
+                    )
+                device.services[UnifiServices.Protect] = (
+                    response.status == 401 if response else False
+                )
+        await session.close()
+
     async def async_scan(
-        self, timeout: int = 15, address: str | None = None
+        self, timeout: int = 31, address: str | None = None
     ) -> list[UnifiDevice]:
         """Discover on port 10001."""
         sock = create_udp_socket(DISCOVERY_PORT)
@@ -373,16 +419,8 @@ class AIOUnifiScanner:
         finally:
             transport.close()
 
-        if any(device.hw_addr is None for device in response_list.values()):
-            arp = ArpSearch()
-            neighbors = await arp.async_get_neighbors()
-            for source, device in response_list.items():
-                if device.hw_addr is None and device.source_ip in neighbors:
-                    response_list[source] = UnifiDevice(
-                        source_ip=device.source_ip,
-                        hw_addr=neighbors[device.source_ip],
-                        ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
-                    )
+        await self._add_missing_hw_addresses(response_list)
+        await self._probe_services(response_list)
 
         self.found_devices = list(response_list.values())
         return self.found_devices
