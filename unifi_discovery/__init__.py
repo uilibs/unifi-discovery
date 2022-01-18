@@ -8,17 +8,18 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
 from typing import TYPE_CHECKING, Callable, cast
 
-from aiohttp import ClientError, ClientSession, TCPConnector
+from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector
 
 if TYPE_CHECKING:
-    from pyroute2 import IPRoute
+    from pyroute2 import IPRoute  # type: ignore
 
 
-class UnifiServices(Enum):
+class UnifiService(Enum):
     Protect = auto()
 
 
@@ -96,7 +97,7 @@ FIELD_PARSERS = {
 
 def _services_dict():
     """Create an dict with known services."""
-    return {service: False for service in UnifiServices}
+    return {service: False for service in UnifiService}
 
 
 @dataclass
@@ -114,7 +115,7 @@ class UnifiDevice:
     platform: str | None = None
     model: str | None = None
     signature_version: str | None = None
-    services: dict[str, bool] = field(default_factory=_services_dict)
+    services: dict[UnifiService, bool] = field(default_factory=_services_dict)
 
 
 def async_get_source_ip(target_ip: str) -> str | None:
@@ -375,18 +376,22 @@ class AIOUnifiScanner:
 
     async def _probe_services(self, response_list: dict[str, UnifiDevice]) -> None:
         """Check which services are available and update the services dict."""
-        session = ClientSession(connector=TCPConnector(verify_ssl=False))
-        for device in response_list.values():
-            if device.platform in PROBE_PLATFORMS:
-                response = None
-                with suppress(ClientError):
-                    response = await session.get(
-                        f"https://{device.source_ip}/proxy/protect/api"
+        timeout = ClientTimeout(total=5.0)
+        async with ClientSession(
+            connector=TCPConnector(verify_ssl=False), timeout=timeout
+        ) as s:
+            for device in response_list.values():
+                if device.platform in PROBE_PLATFORMS:
+                    response = None
+                    with suppress((asyncio.TimeoutError, ClientError)):
+                        response = await s.get(
+                            f"https://{device.source_ip}/proxy/protect/api"
+                        )
+                    device.services[UnifiService.Protect] = (
+                        response.status == HTTPStatus.UNAUTHORIZED
+                        if response
+                        else False
                     )
-                device.services[UnifiServices.Protect] = (
-                    response.status == 401 if response else False
-                )
-        await session.close()
 
     async def async_scan(
         self, timeout: int = 31, address: str | None = None
