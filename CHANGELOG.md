@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.4.0 (2022-01-17)
+### Fix
+* Fix incorrect typing ([`4aa31e9`](https://github.com/bdraco/unifi-discovery/commit/4aa31e9953c45b03c429288cb35bba4f5a3bf0ac))
+
 ## v0.3.0 (2022-01-17)
 ### Feature
 * Probe for running protect ([`dfafb1d`](https://github.com/bdraco/unifi-discovery/commit/dfafb1da33c1bf0800ffc56ee9d48fff0e9e246a))
