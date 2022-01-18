@@ -2,19 +2,43 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import socket
 import time
+from contextlib import suppress
 from dataclasses import dataclass
+from ipaddress import ip_address, ip_network
 from struct import unpack
-from typing import Callable, cast
+from typing import TYPE_CHECKING, Callable, cast
+
+if TYPE_CHECKING:
+    from pyroute2 import IPRoute
 
 _LOGGER = logging.getLogger(__name__)
+
+
+IGNORE_NETWORKS = (
+    ip_network("169.254.0.0/16"),
+    ip_network("127.0.0.0/8"),
+    ip_network("::1/128"),
+    ip_network("::ffff:127.0.0.0/104"),
+    ip_network("224.0.0.0/4"),
+)
+
 
 # UBNT discovery packet payload and reply signature
 UBNT_REQUEST_PAYLOAD = b"\x01\x00\x00\x00"
 UBNT_V1_SIGNATURE = b"\x01\x00\x00"
 DISCOVERY_PORT = 10001
 BROADCAST_FREQUENCY = 3
+ARP_CACHE_POPULATE_TIME = 10
+ARP_TIMEOUT = 10
+IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
+
+
+# Some MAC addresses will drop the leading zero so
+# our mac validation must allow a single char
+VALID_MAC_ADDRESS = re.compile("^([0-9A-Fa-f]{1,2}[:-]){5}([0-9A-Fa-f]{1,2})$")
 
 
 def mac_repr(data):
@@ -23,6 +47,22 @@ def mac_repr(data):
 
 def ip_repr(data):
     return ".".join(("%d" % b) for b in data)
+
+
+def _fill_neighbor(neighbours, ip, mac):
+    """Add a neighbor if it is valid."""
+    try:
+        ip_addr = ip_address(ip)
+    except ValueError:
+        return
+    if any(ip_addr in network for network in IGNORE_NETWORKS):
+        return
+    if not VALID_MAC_ADDRESS.match(mac):
+        return
+    mac = ":".join([i.zfill(2) for i in mac.split(":")])
+    if mac in IGNORE_MACS:
+        return
+    neighbours[ip] = mac
 
 
 # field type -> (field name; parsing function (bytes->str); \
@@ -168,6 +208,78 @@ class UnifiDiscovery(asyncio.DatagramProtocol):
         """Do nothing on connection lost."""
 
 
+class ArpSearch:
+    """Gather system network data."""
+
+    def __init__(self):
+        """Init system network data."""
+        self.ip_route: IPRoute | None = None
+
+    async def async_get_neighbors(self):
+        """Get neighbors from the arp table."""
+        self.ip_route = None
+        with suppress(Exception):
+            from pyroute2 import IPRoute  # pylint: disable=import-outside-toplevel
+
+            self.ip_route = IPRoute()
+        if self.ip_route:
+            return await self._async_get_neighbors_ip_route()
+        return await self._async_get_neighbors_arp()
+
+    async def _async_get_neighbors_arp(self):
+        """Get neighbors with arp command."""
+        neighbours = {}
+        arp = await asyncio.create_subprocess_exec(
+            "arp",
+            "-a",
+            "-n",
+            stdin=None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out_data, _ = await asyncio.wait_for(arp.communicate(), ARP_TIMEOUT)
+        except asyncio.TimeoutError:
+            if arp:
+                with suppress(TypeError):
+                    await arp.kill()
+                del arp
+            return neighbours
+        except AttributeError:
+            return neighbours
+
+        for line in out_data.decode().splitlines():
+            chomped = line.strip()
+            data = chomped.split()
+            if len(data) < 4:
+                continue
+            ip = data[1].strip("()")
+            mac = data[3]
+            _fill_neighbor(neighbours, ip, mac)
+
+        return neighbours
+
+    async def _async_get_neighbors_ip_route(self):
+        """Get neighbors with pyroute2."""
+        neighbours = {}
+        loop = asyncio.get_running_loop()
+        # This shouldn't ever block but it does
+        # interact with netlink so its safer to run
+        # in the executor
+        for neighbour in await loop.run_in_executor(None, self.ip_route.get_neighbours):
+            ip = None
+            mac = None
+            for key, value in neighbour["attrs"]:
+                if key == "NDA_DST":
+                    ip = value
+                elif key == "NDA_LLADDR":
+                    mac = value
+            if ip and mac:
+                _fill_neighbor(neighbours, ip, mac)
+
+        return neighbours
+
+
 class AIOUnifiScanner:
     """A unifi discovery scanner."""
 
@@ -231,7 +343,7 @@ class AIOUnifiScanner:
             remain_time = quit_time - time.monotonic()
 
     async def async_scan(
-        self, timeout: int = 10, address: str | None = None
+        self, timeout: int = 15, address: str | None = None
     ) -> list[UnifiDevice]:
         """Discover on port 10001."""
         sock = create_udp_socket(DISCOVERY_PORT)
@@ -260,6 +372,17 @@ class AIOUnifiScanner:
             )
         finally:
             transport.close()
+
+        if any(device.hw_addr is None for device in response_list.values()):
+            arp = ArpSearch()
+            neighbors = await arp.async_get_neighbors()
+            for source, device in response_list.items():
+                if device.hw_addr is None and device.source_ip in neighbors:
+                    response_list[source] = UnifiDevice(
+                        source_ip=device.source_ip,
+                        hw_addr=neighbors[device.source_ip],
+                        ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
+                    )
 
         self.found_devices = list(response_list.values())
         return self.found_devices
