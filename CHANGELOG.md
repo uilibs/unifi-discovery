@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.0 (2022-01-18)
+### Feature
+* Add support for the system endpoint ([`7d38cd4`](https://github.com/bdraco/unifi-discovery/commit/7d38cd421f58a020a7d34541a9fb6623104772bf))
+
 ## v1.0.0 (2022-01-17)
 ### Feature
 * Speed up discovery ([`f26d8a7`](https://github.com/bdraco/unifi-discovery/commit/f26d8a7f26331923b41f6cda6e60903f249d789d))
