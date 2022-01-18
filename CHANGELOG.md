@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.3.0 (2022-01-17)
+### Feature
+* Probe for running protect ([`dfafb1d`](https://github.com/bdraco/unifi-discovery/commit/dfafb1da33c1bf0800ffc56ee9d48fff0e9e246a))
+
 ## v0.2.0 (2022-01-18)
 ### Feature
 * Reuse the address so multiple can run ([`11593e7`](https://github.com/bdraco/unifi-discovery/commit/11593e77dc9262ccabbb1575eff3e80ad07dd310))
