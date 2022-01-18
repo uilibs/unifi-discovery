@@ -23,7 +23,7 @@ packages = [
 "Changelog" = "https://unifi-discovery.readthedocs.io/changelog.html"
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = "^3.9"
 
 # Documentation Dependencies
 Sphinx = {version = "^4.0.0", optional = true}
