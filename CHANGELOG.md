@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.0.0 (2022-01-17)
+### Feature
+* Speed up discovery ([`f26d8a7`](https://github.com/bdraco/unifi-discovery/commit/f26d8a7f26331923b41f6cda6e60903f249d789d))
+
 ## v0.4.0 (2022-01-17)
 ### Fix
 * Fix incorrect typing ([`4aa31e9`](https://github.com/bdraco/unifi-discovery/commit/4aa31e9953c45b03c429288cb35bba4f5a3bf0ac))
