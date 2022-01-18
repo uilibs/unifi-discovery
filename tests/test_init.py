@@ -54,6 +54,7 @@ async def test_async_scanner_specific_address(mock_discovery_aio_protocol):
     await task
     assert scanner.found_devices == [
         UnifiDevice(
+            source_ip="192.168.212.1",
             hw_addr="e0:63:da:00:5e:08",
             ip_info=["e0:63:da:00:5e:08;192.168.212.1"],
             addr_entry=None,
@@ -77,7 +78,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol):
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("127.0.0.1", DISCOVERY_PORT),
+        ("192.168.203.1", DISCOVERY_PORT),
     )
     protocol.datagram_received(
         b"",
@@ -94,6 +95,20 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol):
     await task
     assert scanner.found_devices == [
         UnifiDevice(
+            source_ip="192.168.203.1",
+            hw_addr=None,
+            ip_info=None,
+            addr_entry=None,
+            fw_version=None,
+            mac_address=None,
+            uptime=None,
+            hostname=None,
+            platform=None,
+            model=None,
+            signature_version="1",
+        ),
+        UnifiDevice(
+            source_ip="192.168.213.252",
             hw_addr="24:5a:4c:75:ba:e6",
             ip_info=["24:5a:4c:75:ba:e6;192.168.213.47"],
             addr_entry="192.168.213.47",
@@ -104,7 +119,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol):
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
             signature_version="1",
-        )
+        ),
     ]
 
 

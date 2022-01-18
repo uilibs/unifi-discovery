@@ -48,7 +48,8 @@ FIELD_PARSERS = {
 class UnifiDevice:
     """A device discovered."""
 
-    hw_addr: str
+    source_ip: str
+    hw_addr: str | None = None
     ip_info: list[str] | None = None
     addr_entry: str | None = None
     fw_version: str | None = None
@@ -58,6 +59,23 @@ class UnifiDevice:
     platform: str | None = None
     model: str | None = None
     signature_version: str | None = None
+
+
+def async_get_source_ip(target_ip: str) -> str | None:
+    """Return the source ip that will reach target_ip."""
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    test_sock.setblocking(False)  # must be non-blocking for async
+    try:
+        test_sock.connect((target_ip, 1))
+        return cast(str, test_sock.getsockname()[0])
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.debug(
+            "The system could not auto detect the source ip for %s on your operating system",
+            target_ip,
+        )
+        return None
+    finally:
+        test_sock.close()
 
 
 def iter_fields(data, _len):
@@ -70,21 +88,25 @@ def iter_fields(data, _len):
         yield fieldType, fieldData
 
 
-def parse_ubnt_response(payload: bytes | None) -> UnifiDevice | None:
+def parse_ubnt_response(
+    payload: bytes | None, from_address: tuple[str, int]
+) -> UnifiDevice | None:
     # We received a broadcast packet in reply to our discovery
-    fields: dict[str, str | list[str]] = {}
+    fields: dict[str, str | list[str]] = {"source_ip": from_address[0]}
 
-    if payload is None or len(payload) < 5:
+    if payload is None or len(payload) < 4:
         return None
-    if payload[0:4] == UBNT_REQUEST_PAYLOAD:  # Check for a UBNT discovery request
+    if (
+        payload[0:4] == UBNT_REQUEST_PAYLOAD and from_address[1] != DISCOVERY_PORT
+    ):  # Check for a UBNT discovery request
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
-        return None
+        return UnifiDevice(**fields)  # type: ignore
     elif payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
         # (first 3 bytes of the payload should be \x01\x00\x00)
         fields["signature_version"] = "1"  # this is not always correct
         field_parsers_packet_specific = {**FIELD_PARSERS}
     else:
-        return None  # Not a valid UBNT discovery reply, skip to next received packet
+        return None
 
     # Walk the reply payload, staring from offset 04
     # (just after reply signature and payload size).
@@ -150,6 +172,7 @@ class AIOUnifiScanner:
 
     def __init__(self) -> None:
         self.found_devices: list[UnifiDevice] = []
+        self.source_ip: str | None = None
 
     def _destination_from_address(self, address: str | None) -> tuple[str, int]:
         if address is None:
@@ -161,15 +184,17 @@ class AIOUnifiScanner:
         data: bytes | None,
         from_address: tuple[str, int],
         address: str | None,
-        response_list: dict[tuple[str, int], UnifiDevice],
+        response_list: dict[str, UnifiDevice],
     ) -> bool:
         """Process a response.
 
         Returns True if processing should stop
         """
-        response = parse_ubnt_response(data)
+        if from_address[0] == self.source_ip:
+            return False
+        response = parse_ubnt_response(data, from_address)
         if response is not None:
-            response_list[from_address] = response
+            response_list[from_address[0]] = response
             return from_address[0] == address
         return False
 
@@ -181,6 +206,7 @@ class AIOUnifiScanner:
         found_all_future: "asyncio.Future[bool]",
     ) -> None:
         """Send the scans."""
+        self.source_ip = async_get_source_ip("255.255.255.255")
         _LOGGER.debug("discover: %s => %s", destination, UBNT_REQUEST_PAYLOAD)
         transport.sendto(UBNT_REQUEST_PAYLOAD, destination)
         quit_time = time.monotonic() + timeout
@@ -210,7 +236,7 @@ class AIOUnifiScanner:
         sock = create_udp_socket(DISCOVERY_PORT)
         destination = self._destination_from_address(address)
         found_all_future: asyncio.Future[bool] = asyncio.Future()
-        response_list: dict[tuple[str, int], UnifiDevice] = {}
+        response_list: dict[str, UnifiDevice] = {}
 
         def _on_response(data: bytes, addr: tuple[str, int]) -> None:
             _LOGGER.debug("discover: %s <= %s", addr, data)
