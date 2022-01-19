@@ -31,6 +31,9 @@ class UnifiService(Enum):
 
 _LOGGER = logging.getLogger(__name__)
 
+BROADCAST_IP = "255.255.255.255"
+MDNS_TARGET_IP = "224.0.0.251"
+PUBLIC_TARGET_IP = "1.1.1.1"
 
 IGNORE_NETWORKS = (
     ip_network("169.254.0.0/16"),
@@ -349,7 +352,12 @@ class AIOUnifiScanner:
         found_all_future: "asyncio.Future[bool]",
     ) -> None:
         """Send the scans."""
-        self.source_ip = async_get_source_ip("255.255.255.255")
+        self.source_ip = (
+            async_get_source_ip(BROADCAST_IP)
+            or async_get_source_ip(MDNS_TARGET_IP)
+            or async_get_source_ip(PUBLIC_TARGET_IP)
+        )
+        _LOGGER.debug("source_ip: %s", self.source_ip)
         _LOGGER.debug("discover: %s => %s", destination, UBNT_REQUEST_PAYLOAD)
         transport.sendto(UBNT_REQUEST_PAYLOAD, destination)
         quit_time = time.monotonic() + timeout
