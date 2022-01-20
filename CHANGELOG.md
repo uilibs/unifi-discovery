@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.2 (2022-01-19)
+### Fix
+* Fix exception when system endpoint is missing the mac ([`0f9a98d`](https://github.com/bdraco/unifi-discovery/commit/0f9a98d838d56dd75a9c86901f4e7a8fea374d03))
+
 ## v1.1.1 (2022-01-18)
 ### Fix
 * Ensure we can detect the source ip ([`6a25d2e`](https://github.com/bdraco/unifi-discovery/commit/6a25d2ecbe23df5712ad69d6399f83e2c130d4c7))
