@@ -437,11 +437,12 @@ class AIOUnifiScanner:
                     continue
                 device = response_list[source_ip]
                 short_name = system.get("hardware", {}).get("shortname")
+                mac = system.get("mac")
                 response_list[source_ip] = replace(
                     device,
                     platform=device.platform or short_name,
                     hostname=device.hostname or system.get("name").replace(" ", "-"),
-                    hw_addr=device.hw_addr or _format_mac(system.get("mac")),
+                    hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
                     direct_connect_domain=system.get("directConnectDomain"),
                     is_sso_enabled=system.get("isSsoEnabled"),
                     is_single_user=system.get("isSingleUser"),
