@@ -219,6 +219,48 @@ async def test_async_scanner_no_system_response(
 
 
 @pytest.mark.asyncio
+async def test_async_scanner_system_api_missing_mac(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test scanner with a broadcast when the system api responds but no mac."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get(
+        "https://192.168.203.1/api/system",
+        payload={
+            "hardware": {"shortname": "UCKP"},
+            "name": "UniFi-CloudKey-Gen2-Plus",
+        },
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", DISCOVERY_PORT),
+    )
+    await task
+    assert scanner.found_devices == [
+        UnifiDevice(
+            source_ip="192.168.203.1",
+            hw_addr=None,
+            ip_info=None,
+            addr_entry=None,
+            fw_version=None,
+            mac_address=None,
+            uptime=None,
+            hostname="UniFi-CloudKey-Gen2-Plus",
+            platform="UCKP",
+            model=None,
+            signature_version="1",
+            services={UnifiService.Protect: True},
+            direct_connect_domain=None,
+            is_sso_enabled=None,
+            is_single_user=None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_async_scanner_falls_back_to_any_source_port_if_socket_in_use():
     """Test port fallback."""
     hold_socket = create_udp_socket(DISCOVERY_PORT)
