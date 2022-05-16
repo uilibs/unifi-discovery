@@ -3,6 +3,7 @@ import contextlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+from aiohttp import ContentTypeError
 from aioresponses import aioresponses
 
 from unifi_discovery import (
@@ -250,6 +251,45 @@ async def test_async_scanner_system_api_missing_mac(
             uptime=None,
             hostname="UniFi-CloudKey-Gen2-Plus",
             platform="UCKP",
+            model=None,
+            signature_version="1",
+            services={UnifiService.Protect: True},
+            direct_connect_domain=None,
+            is_sso_enabled=None,
+            is_single_user=None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_system_api_returns_html(
+    mock_discovery_aio_protocol, mock_aioresponse, caplog
+):
+    """Test scanner with a broadcast when the system api responds but no mac."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get(
+        "https://192.168.203.1/api/system",
+        exception=ContentTypeError,
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", DISCOVERY_PORT),
+    )
+    await task
+    assert scanner.found_devices == [
+        UnifiDevice(
+            source_ip="192.168.203.1",
+            hw_addr=None,
+            ip_info=None,
+            addr_entry=None,
+            fw_version=None,
+            mac_address=None,
+            uptime=None,
+            hostname=None,
+            platform=None,
             model=None,
             signature_version="1",
             services={UnifiService.Protect: True},
