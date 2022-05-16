@@ -22,7 +22,7 @@ from aiohttp import (
 )
 
 if TYPE_CHECKING:
-    from pyroute2 import IPRoute  # type: ignore
+    from pr2modules.iproute import IPRoute  # type: ignore
 
 
 class UnifiService(Enum):
@@ -252,7 +252,9 @@ class ArpSearch:
         """Get neighbors from the arp table."""
         self.ip_route = None
         with suppress(Exception):
-            from pyroute2 import IPRoute  # pylint: disable=import-outside-toplevel
+            from pr2modules.iproute import (  # pylint: disable=import-outside-toplevel
+                IPRoute,
+            )
 
             self.ip_route = IPRoute()
         if self.ip_route:
