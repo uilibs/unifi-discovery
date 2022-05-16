@@ -18,6 +18,7 @@ from aiohttp import (
     ClientResponse,
     ClientSession,
     ClientTimeout,
+    ContentTypeError,
     TCPConnector,
 )
 
@@ -430,6 +431,11 @@ class AIOUnifiScanner:
                     continue
                 try:
                     system = await system_response.json()
+                except ContentTypeError as ex:
+                    _LOGGER.debug(
+                        "System endpoint not available for %s: %s", source_ip, ex
+                    )
+                    continue
                 except (asyncio.TimeoutError, ClientError):
                     _LOGGER.exception("Failed to get system info for %s", source_ip)
                     continue
