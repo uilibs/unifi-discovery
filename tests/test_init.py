@@ -3,7 +3,7 @@ import contextlib
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aiohttp import ContentTypeError
+from aiohttp import ClientError, ClientSession, ContentTypeError, TCPConnector
 from aioresponses import aioresponses
 
 from unifi_discovery import (
@@ -13,6 +13,7 @@ from unifi_discovery import (
     UnifiDevice,
     UnifiDiscovery,
     UnifiService,
+    async_console_is_alive,
     create_udp_socket,
 )
 
@@ -307,3 +308,15 @@ async def test_async_scanner_falls_back_to_any_source_port_if_socket_in_use():
     assert hold_socket.getsockname() == ("0.0.0.0", DISCOVERY_PORT)
     random_socket = create_udp_socket(DISCOVERY_PORT)
     assert random_socket.getsockname() is not None
+
+
+@pytest.mark.asyncio
+async def test_async_console_is_alive(mock_aioresponse):
+    """Test if a console is alive."""
+    mock_aioresponse.get("https://1.2.3.1/api/system", status=401)
+    mock_aioresponse.get("https://1.2.3.2/api/system", status=200)
+    mock_aioresponse.get("https://1.2.3.3/api/system", exception=ClientError)
+    async with ClientSession(connector=TCPConnector(ssl=False)) as session:
+        assert await async_console_is_alive(session, "1.2.3.1") is True
+        assert await async_console_is_alive(session, "1.2.3.2") is True
+        assert await async_console_is_alive(session, "1.2.3.3") is False
