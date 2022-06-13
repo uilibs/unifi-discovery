@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.4 (2022-06-12)
+### Feature
+* Add async_console_is_alive ([`cb123c3`](https://github.com/bdraco/unifi-discovery/commit/cb123c3c0ea45c6eb721f69762062c435f4e7771))
+
 ## v1.1.2 (2022-01-19)
 ### Fix
 * Fix exception when system endpoint is missing the mac ([`0f9a98d`](https://github.com/bdraco/unifi-discovery/commit/0f9a98d838d56dd75a9c86901f4e7a8fea374d03))
