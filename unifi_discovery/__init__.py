@@ -56,6 +56,9 @@ ARP_CACHE_POPULATE_TIME = 10
 ARP_TIMEOUT = 10
 IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
 
+API_TIMEOUT = ClientTimeout(total=5.0)
+SYSTEM_API_ENDPOINT = "/api/system"
+PROTECT_API_ENDPOINT = "/proxy/protect/api"
 
 # Some MAC addresses will drop the leading zero so
 # our mac validation must allow a single char
@@ -133,6 +136,20 @@ class UnifiDevice:
     direct_connect_domain: str | None = None
     is_sso_enabled: bool | None = None
     is_single_user: bool | None = None
+
+
+async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
+    """Check if a console is alive.
+
+    The passed in session must not validate ssl.
+    """
+    try:
+        await session.get(
+            f"https://{target_ip}{SYSTEM_API_ENDPOINT}", timeout=API_TIMEOUT
+        )
+    except ClientError:
+        return False
+    return True
 
 
 def async_get_source_ip(target_ip: str) -> str | None:
@@ -403,58 +420,63 @@ class AIOUnifiScanner:
         self, response_list: dict[str, UnifiDevice]
     ) -> None:
         """Check which services are available and update the services dict."""
-        timeout = ClientTimeout(total=5.0)
         async with ClientSession(
-            connector=TCPConnector(ssl=False), timeout=timeout
-        ) as s:
-            device_tasks: dict[str, Awaitable] = {}
-            system_tasks: dict[str, Awaitable] = {}
-            for device in response_list.values():
-                if device.platform in PROBE_PLATFORMS:
-                    source_ip = device.source_ip
-                    device_tasks[source_ip] = s.get(
-                        f"https://{source_ip}/proxy/protect/api"
-                    )
-                    system_tasks[source_ip] = s.get(f"https://{source_ip}/api/system")
-            results: list[ClientResponse | Exception] = await asyncio.gather(
-                *(*device_tasks.values(), *system_tasks.values()),
-                return_exceptions=True,
+            connector=TCPConnector(ssl=False), timeout=API_TIMEOUT
+        ) as session:
+            await self._probe_services_and_system_with_session(response_list, session)
+
+    async def _probe_services_and_system_with_session(
+        self, response_list: dict[str, UnifiDevice], session: ClientSession
+    ) -> None:
+        """Check which services are available and update the services dict with a provided session."""
+        device_tasks: dict[str, Awaitable] = {}
+        system_tasks: dict[str, Awaitable] = {}
+        for device in response_list.values():
+            if device.platform in PROBE_PLATFORMS:
+                source_ip = device.source_ip
+                device_tasks[source_ip] = session.get(
+                    f"https://{source_ip}{PROTECT_API_ENDPOINT}"
+                )
+                system_tasks[source_ip] = session.get(
+                    f"https://{source_ip}{SYSTEM_API_ENDPOINT}"
+                )
+        results: list[ClientResponse | Exception] = await asyncio.gather(
+            *(*device_tasks.values(), *system_tasks.values()),
+            return_exceptions=True,
+        )
+        device_task_len = len(device_tasks)
+        for idx, source_ip in enumerate(device_tasks):
+            device_response = results[idx]
+            response_list[source_ip].services[UnifiService.Protect] = (
+                device_response.status == HTTPStatus.UNAUTHORIZED
+                if not isinstance(device_response, Exception)
+                else False
             )
-            device_task_len = len(device_tasks)
-            for idx, source_ip in enumerate(device_tasks):
-                device_response = results[idx]
-                response_list[source_ip].services[UnifiService.Protect] = (
-                    device_response.status == HTTPStatus.UNAUTHORIZED
-                    if not isinstance(device_response, Exception)
-                    else False
-                )
-                system_response = results[idx + device_task_len]
-                if isinstance(system_response, Exception):
-                    continue
-                try:
-                    system = await system_response.json()
-                except ContentTypeError as ex:
-                    _LOGGER.debug(
-                        "System endpoint not available for %s: %s", source_ip, ex
-                    )
-                    continue
-                except (asyncio.TimeoutError, ClientError):
-                    _LOGGER.exception("Failed to get system info for %s", source_ip)
-                    continue
-                if not system:
-                    continue
-                device = response_list[source_ip]
-                short_name = system.get("hardware", {}).get("shortname")
-                mac = system.get("mac")
-                response_list[source_ip] = replace(
-                    device,
-                    platform=device.platform or short_name,
-                    hostname=device.hostname or system.get("name").replace(" ", "-"),
-                    hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
-                    direct_connect_domain=system.get("directConnectDomain"),
-                    is_sso_enabled=system.get("isSsoEnabled"),
-                    is_single_user=system.get("isSingleUser"),
-                )
+            system_response = results[idx + device_task_len]
+            if isinstance(system_response, Exception):
+                continue
+            try:
+                system = await system_response.json()
+            except ContentTypeError as ex:
+                _LOGGER.debug("System endpoint not available for %s: %s", source_ip, ex)
+                continue
+            except (asyncio.TimeoutError, ClientError):
+                _LOGGER.exception("Failed to get system info for %s", source_ip)
+                continue
+            if not system:
+                continue
+            device = response_list[source_ip]
+            short_name = system.get("hardware", {}).get("shortname")
+            mac = system.get("mac")
+            response_list[source_ip] = replace(
+                device,
+                platform=device.platform or short_name,
+                hostname=device.hostname or system.get("name").replace(" ", "-"),
+                hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
+                direct_connect_domain=system.get("directConnectDomain"),
+                is_sso_enabled=system.get("isSsoEnabled"),
+                is_single_user=system.get("isSingleUser"),
+            )
 
     async def async_scan(
         self, timeout: int = 31, address: str | None = None
