@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.6 (2022-08-30)
+### Fix
+* Handle no name devices ([#27](https://github.com/bdraco/unifi-discovery/issues/27)) ([`762c342`](https://github.com/bdraco/unifi-discovery/commit/762c342a5ca16ae8c56c6b1aa280f8d42f4ee785))
+
 ## v1.1.4 (2022-06-12)
 ### Feature
 * Add async_console_is_alive ([`cb123c3`](https://github.com/bdraco/unifi-discovery/commit/cb123c3c0ea45c6eb721f69762062c435f4e7771))
