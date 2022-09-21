@@ -316,7 +316,10 @@ async def test_async_console_is_alive(mock_aioresponse):
     mock_aioresponse.get("https://1.2.3.1/api/system", status=401)
     mock_aioresponse.get("https://1.2.3.2/api/system", status=200)
     mock_aioresponse.get("https://1.2.3.3/api/system", exception=ClientError)
+    mock_aioresponse.get("https://1.2.3.4/api/system", exception=asyncio.TimeoutError)
+
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         assert await async_console_is_alive(session, "1.2.3.1") is True
         assert await async_console_is_alive(session, "1.2.3.2") is True
         assert await async_console_is_alive(session, "1.2.3.3") is False
+        assert await async_console_is_alive(session, "1.2.3.4") is False
