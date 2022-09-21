@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.7 (2022-09-21)
+### Fix
+* Handle asyncio.TimeoutError in console alive check ([#29](https://github.com/bdraco/unifi-discovery/issues/29)) ([`2af5864`](https://github.com/bdraco/unifi-discovery/commit/2af5864c068422a352e0b714ba298274da40ad74))
+
 ## v1.1.6 (2022-08-30)
 ### Fix
 * Handle no name devices ([#27](https://github.com/bdraco/unifi-discovery/issues/27)) ([`762c342`](https://github.com/bdraco/unifi-discovery/commit/762c342a5ca16ae8c56c6b1aa280f8d42f4ee785))
