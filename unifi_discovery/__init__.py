@@ -147,7 +147,7 @@ async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool
         await session.get(
             f"https://{target_ip}{SYSTEM_API_ENDPOINT}", timeout=API_TIMEOUT
         )
-    except ClientError:
+    except (asyncio.TimeoutError, ClientError):
         return False
     return True
 
