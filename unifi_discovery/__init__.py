@@ -23,7 +23,7 @@ from aiohttp import (
 )
 
 if TYPE_CHECKING:
-    from pr2modules.iproute import IPRoute  # type: ignore
+    from pyroute2.iproute import IPRoute  # noqa: F401
 
 
 class UnifiService(Enum):
@@ -265,16 +265,25 @@ class ArpSearch:
     def __init__(self):
         """Init system network data."""
         self.ip_route: IPRoute | None = None
+        self._imported_iproute = False
 
-    async def async_get_neighbors(self):
-        """Get neighbors from the arp table."""
-        self.ip_route = None
+    def _get_iproute(self):
+        """Get the iproute object."""
         with suppress(Exception):
-            from pr2modules.iproute import (  # pylint: disable=import-outside-toplevel
+            from pyroute2.iproute import (  # pylint: disable=import-outside-toplevel
                 IPRoute,
             )
 
-            self.ip_route = IPRoute()
+            return IPRoute()
+        return None
+
+    async def async_get_neighbors(self):
+        """Get neighbors from the arp table."""
+        if not self._imported_iproute:
+            self.ip_route = await asyncio.get_running_loop().run_in_executor(
+                None, self._get_iproute
+            )
+            self._imported_iproute = True
         if self.ip_route:
             return await self._async_get_neighbors_ip_route()
         return await self._async_get_neighbors_arp()
