@@ -2,6 +2,14 @@
 
 <!--next-version-placeholder-->
 
+## v1.1.8 (2024-03-02)
+
+### Fix
+
+* Bump versions to fix ci ([#33](https://github.com/bdraco/unifi-discovery/issues/33)) ([`57c95a4`](https://github.com/bdraco/unifi-discovery/commit/57c95a4948fcbb34f2b22c767a65e8d0d4a5cbeb))
+* Docs build ([#32](https://github.com/bdraco/unifi-discovery/issues/32)) ([`774834b`](https://github.com/bdraco/unifi-discovery/commit/774834bb6b71faadb2067cec81acab07a1cc7f8a))
+* Import pyroute in the executor ([#31](https://github.com/bdraco/unifi-discovery/issues/31)) ([`fae1de5`](https://github.com/bdraco/unifi-discovery/commit/fae1de5e382c00dee1ff11e2b925331d6a3eab53))
+
 ## v1.1.7 (2022-09-21)
 ### Fix
 * Handle asyncio.TimeoutError in console alive check ([#29](https://github.com/bdraco/unifi-discovery/issues/29)) ([`2af5864`](https://github.com/bdraco/unifi-discovery/commit/2af5864c068422a352e0b714ba298274da40ad74))
