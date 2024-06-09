@@ -203,7 +203,6 @@ def parse_ubnt_response(
     # (just after reply signature and payload size).
     # Take into account the payload length in offset 3
     for field_type, field_data in iter_fields(payload[4:], payload[3]):
-
         if field_type not in field_parsers_packet_specific:
             continue
 
