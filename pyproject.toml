@@ -5,7 +5,7 @@ description = "Discover Unifi Devices"
 authors = ["J. Nick Koston <nick@koston.org>"]
 license = "Apache Software License 2.0"
 readme = "README.md"
-repository = "https://github.com/bdraco/unifi-discovery"
+repository = "https://github.com/uilibs/unifi-discovery"
 documentation = "https://unifi-discovery.readthedocs.io"
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -19,7 +19,7 @@ packages = [
 ]
 
 [tool.poetry.urls]
-"Bug Tracker" = "https://github.com/bdraco/unifi-discovery/issues"
+"Bug Tracker" = "https://github.com/uilibs/unifi-discovery/issues"
 "Changelog" = "https://unifi-discovery.readthedocs.io/changelog.html"
 
 [tool.poetry.dependencies]
