@@ -1,14 +1,14 @@
 # Unifi Discovery
 
 <p align="center">
-  <a href="https://github.com/bdraco/unifi-discovery/actions?query=workflow%3ACI">
-    <img src="https://img.shields.io/github/workflow/status/bdraco/unifi-discovery/CI/main?label=CI&logo=github&style=flat-square" alt="CI Status" >
+  <a href="https://github.com/uilibs/unifi-discovery/actions?query=workflow%3ACI">
+    <img src="https://img.shields.io/github/workflow/status/uilibs/unifi-discovery/CI/main?label=CI&logo=github&style=flat-square" alt="CI Status" >
   </a>
   <a href="https://unifi-discovery.readthedocs.io">
     <img src="https://img.shields.io/readthedocs/unifi-discovery.svg?logo=read-the-docs&logoColor=fff&style=flat-square" alt="Documentation Status">
   </a>
-  <a href="https://codecov.io/gh/bdraco/unifi-discovery">
-    <img src="https://img.shields.io/codecov/c/github/bdraco/unifi-discovery.svg?logo=codecov&logoColor=fff&style=flat-square" alt="Test coverage percentage">
+  <a href="https://codecov.io/gh/uilibs/unifi-discovery">
+    <img src="https://img.shields.io/codecov/c/github/uilibs/unifi-discovery.svg?logo=codecov&logoColor=fff&style=flat-square" alt="Test coverage percentage">
   </a>
 </p>
 <p align="center">
@@ -52,7 +52,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <!-- markdownlint-disable -->
 <table>
   <tr>
-    <td align="center"><a href="https://florisvdk.net"><img src="https://avatars.githubusercontent.com/u/16548176?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Floris Van der krieken</b></sub></a><br /><a href="https://github.com/bdraco/unifi-discovery/commits?author=florisvdk" title="Code">💻</a> <a href="#example-florisvdk" title="Examples">💡</a></td>
+    <td align="center"><a href="https://florisvdk.net"><img src="https://avatars.githubusercontent.com/u/16548176?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Floris Van der krieken</b></sub></a><br /><a href="https://github.com/uilibs/unifi-discovery/commits?author=florisvdk" title="Code">💻</a> <a href="#example-florisvdk" title="Examples">💡</a></td>
   </tr>
 </table>
 
