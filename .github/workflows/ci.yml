@@ -76,6 +76,10 @@ jobs:
         run: poetry run make html
 
   release:
+    permissions:
+      id-token: write
+      contents: write
+
     runs-on: ubuntu-latest
     environment: release
     if: github.ref == 'refs/heads/main'
