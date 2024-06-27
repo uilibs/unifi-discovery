@@ -2,6 +2,16 @@
 
 <!--next-version-placeholder-->
 
+## v1.2.0 (2024-06-27)
+
+### Feature
+
+* Update urls to new home ([#34](https://github.com/uilibs/unifi-discovery/issues/34)) ([`916b7cd`](https://github.com/uilibs/unifi-discovery/commit/916b7cd0a07775f25119ee69cdd2ac4be3b23d72))
+
+### Fix
+
+* Fix license classifier ([#37](https://github.com/uilibs/unifi-discovery/issues/37)) ([`49a3fd1`](https://github.com/uilibs/unifi-discovery/commit/49a3fd10d0ec8d1de068d6e898ace71cb7bff397))
+
 ## v1.1.8 (2024-03-02)
 
 ### Fix
