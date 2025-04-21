@@ -1207,18 +1207,18 @@ windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
 name = "pyroute2"
-version = "0.7.12"
+version = "0.8.1"
 description = "Python Netlink library"
 optional = false
 python-versions = "*"
 groups = ["main"]
 files = [
-    {file = "pyroute2-0.7.12-py3-none-any.whl", hash = "sha256:9df8d0fcb5fb0a724603bcfdef76ffbd287f00f69e9fb660c20a06962b24691a"},
-    {file = "pyroute2-0.7.12.tar.gz", hash = "sha256:54d226fc3ff2732f49bac9b26853c50c9d05be05a4d9daf09c7cf6d77301eff3"},
+    {file = "pyroute2-0.8.1-py3-none-any.whl", hash = "sha256:f339be8acffc46cd87bca19217b559ea5838810b4b08836301a52cb2cb4c054b"},
+    {file = "pyroute2-0.8.1.tar.gz", hash = "sha256:b91f4a1f7abb9824637b1fe67e6e4a0a071d98d4a1a1b47ef792304ff3adad11"},
 ]
 
 [package.dependencies]
-win-inet-pton = {version = "*", markers = "platform_system == \"Windows\""}
+win_inet_pton = {version = "*", markers = "platform_system == \"Windows\""}
 
 [[package]]
 name = "pytest"
