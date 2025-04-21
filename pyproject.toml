@@ -52,8 +52,8 @@ aioresponses = "^0.7.3"
 
 [tool.semantic_release]
 branch = "main"
-version_toml = "pyproject.toml:tool.poetry.version"
-version_variable = "unifi_discovery/__init__.py:__version__"
+version_toml = ["pyproject.toml:tool.poetry.version"]
+version_variables = ["unifi_discovery/__init__.py:__version__"]
 build_command = "pip install poetry && poetry build"
 
 [tool.pytest.ini_options]
