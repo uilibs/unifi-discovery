@@ -48,7 +48,7 @@ pytest-cov = "^6.1.1"
 pyupgrade = "^3.19.1"
 tox = "^3.20.1"
 pytest-asyncio = "^0.17.2"
-aioresponses = "^0.7.3"
+aioresponses = "^0.7.8"
 
 [tool.semantic_release]
 branch = "main"
