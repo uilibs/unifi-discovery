@@ -85,6 +85,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
     """Test scanner with a broadcast."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=401)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
         payload={
@@ -101,7 +102,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", DISCOVERY_PORT),
+        ("192.168.203.1", 44306),
     )
     protocol.datagram_received(
         b"",
@@ -128,8 +129,8 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             hostname="UDM-Pro-SE",
             platform="UDMPROSE",
             model=None,
-            signature_version="1",
-            services={UnifiService.Protect: True},
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: True},
             direct_connect_domain="xyz.id.ui.direct",
             is_sso_enabled=True,
             is_single_user=True,
@@ -146,7 +147,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
             signature_version="1",
-            services={UnifiService.Protect: False},
+            services={UnifiService.Protect: False, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -161,13 +162,14 @@ async def test_async_scanner_no_system_response(
     """Test scanner with a broadcast when the system api does not response."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
 
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", DISCOVERY_PORT),
+        ("192.168.203.1", 44306),
     )
     protocol.datagram_received(
         b"",
@@ -194,8 +196,8 @@ async def test_async_scanner_no_system_response(
             hostname=None,
             platform=None,
             model=None,
-            signature_version="1",
-            services={UnifiService.Protect: True},
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -212,7 +214,7 @@ async def test_async_scanner_no_system_response(
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
             signature_version="1",
-            services={UnifiService.Protect: False},
+            services={UnifiService.Protect: False, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -227,6 +229,7 @@ async def test_async_scanner_system_api_missing_mac(
     """Test scanner with a broadcast when the system api responds but no mac."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
         payload={
@@ -238,7 +241,7 @@ async def test_async_scanner_system_api_missing_mac(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", DISCOVERY_PORT),
+        ("192.168.203.1", 44306),
     )
     await task
     assert scanner.found_devices == [
@@ -253,8 +256,8 @@ async def test_async_scanner_system_api_missing_mac(
             hostname="UniFi-CloudKey-Gen2-Plus",
             platform="UCKP",
             model=None,
-            signature_version="1",
-            services={UnifiService.Protect: True},
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -269,6 +272,7 @@ async def test_async_scanner_system_api_returns_html(
     """Test scanner with a broadcast when the system api responds but no mac."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
         exception=ContentTypeError,
@@ -277,7 +281,7 @@ async def test_async_scanner_system_api_returns_html(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", DISCOVERY_PORT),
+        ("192.168.203.1", 44306),
     )
     await task
     assert scanner.found_devices == [
@@ -292,8 +296,99 @@ async def test_async_scanner_system_api_returns_html(
             hostname=None,
             platform=None,
             model=None,
-            signature_version="1",
-            services={UnifiService.Protect: True},
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: False},
+            direct_connect_domain=None,
+            is_sso_enabled=None,
+            is_single_user=None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_access_service_detected(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test scanner detects Access service."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=401)
+    mock_aioresponse.get(
+        "https://192.168.203.1/api/system",
+        payload={
+            "hardware": {"shortname": "UNVR"},
+            "name": "UNVR",
+            "mac": "E4388332C9B1",
+            "isSingleUser": False,
+            "isSsoEnabled": True,
+            "directConnectDomain": "abc.id.ui.direct",
+        },
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", 44306),
+    )
+    await task
+    assert scanner.found_devices == [
+        UnifiDevice(
+            source_ip="192.168.203.1",
+            hw_addr="e4:38:83:32:c9:b1",
+            ip_info=None,
+            addr_entry=None,
+            fw_version=None,
+            mac_address=None,
+            uptime=None,
+            hostname="UNVR",
+            platform="UNVR",
+            model=None,
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: True},
+            direct_connect_domain="abc.id.ui.direct",
+            is_sso_enabled=True,
+            is_single_user=False,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_access_service_not_available(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test scanner when Access service is not available."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", exception=ClientError)
+    mock_aioresponse.get(
+        "https://192.168.203.1/api/system",
+        payload={
+            "hardware": {"shortname": "UCKP"},
+            "name": "CloudKey",
+            "mac": "28704E522AFF",
+        },
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", 44306),
+    )
+    await task
+    assert scanner.found_devices == [
+        UnifiDevice(
+            source_ip="192.168.203.1",
+            hw_addr="28:70:4e:52:2a:ff",
+            ip_info=None,
+            addr_entry=None,
+            fw_version=None,
+            mac_address=None,
+            uptime=None,
+            hostname="CloudKey",
+            platform="UCKP",
+            model=None,
+            signature_version=None,
+            services={UnifiService.Protect: True, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,

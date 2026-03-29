@@ -11,7 +11,7 @@ from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
-from typing import TYPE_CHECKING, Awaitable, Callable, cast
+from typing import TYPE_CHECKING, Callable, cast
 
 from aiohttp import (
     ClientError,
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 class UnifiService(Enum):
     Protect = auto()
+    Access = auto()
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,8 +46,6 @@ IGNORE_NETWORKS = (
 )
 
 
-PROBE_PLATFORMS = {"UDMPROSE", "UDMPRO", "UNVR", "UNVRPRO", "UCKP", None}
-
 # UBNT discovery packet payload and reply signature
 UBNT_REQUEST_PAYLOAD = b"\x01\x00\x00\x00"
 UBNT_V1_SIGNATURE = b"\x01\x00\x00"
@@ -59,6 +58,7 @@ IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
 API_TIMEOUT = ClientTimeout(total=5.0)
 SYSTEM_API_ENDPOINT = "/api/system"
 PROTECT_API_ENDPOINT = "/proxy/protect/api"
+ACCESS_API_ENDPOINT = "/proxy/access/api"
 
 # Some MAC addresses will drop the leading zero so
 # our mac validation must allow a single char
@@ -437,30 +437,42 @@ class AIOUnifiScanner:
         self, response_list: dict[str, UnifiDevice], session: ClientSession
     ) -> None:
         """Check which services are available and update the services dict with a provided session."""
-        device_tasks: dict[str, Awaitable] = {}
-        system_tasks: dict[str, Awaitable] = {}
-        for device in response_list.values():
-            if device.platform in PROBE_PLATFORMS:
-                source_ip = device.source_ip
-                device_tasks[source_ip] = session.get(
-                    f"https://{source_ip}{PROTECT_API_ENDPOINT}"
-                )
-                system_tasks[source_ip] = session.get(
-                    f"https://{source_ip}{SYSTEM_API_ENDPOINT}"
-                )
-        results: list[ClientResponse | Exception] = await asyncio.gather(
-            *(*device_tasks.values(), *system_tasks.values()),
-            return_exceptions=True,
+        console_ips: list[str] = [
+            device.source_ip
+            for device in response_list.values()
+            if device.signature_version is None
+        ]
+        if not console_ips:
+            return
+
+        async def _probe_console(source_ip: str) -> tuple[
+            ClientResponse | Exception,
+            ClientResponse | Exception,
+            ClientResponse | Exception,
+        ]:
+            return await asyncio.gather(
+                session.get(f"https://{source_ip}{PROTECT_API_ENDPOINT}"),
+                session.get(f"https://{source_ip}{ACCESS_API_ENDPOINT}"),
+                session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
+                return_exceptions=True,
+            )
+
+        all_results = await asyncio.gather(
+            *(_probe_console(ip) for ip in console_ips)
         )
-        device_task_len = len(device_tasks)
-        for idx, source_ip in enumerate(device_tasks):
-            device_response = results[idx]
+        for source_ip, (protect_response, access_response, system_response) in zip(
+            console_ips, all_results
+        ):
             response_list[source_ip].services[UnifiService.Protect] = (
-                device_response.status == HTTPStatus.UNAUTHORIZED
-                if not isinstance(device_response, Exception)
+                protect_response.status == HTTPStatus.UNAUTHORIZED
+                if not isinstance(protect_response, Exception)
                 else False
             )
-            system_response = results[idx + device_task_len]
+            response_list[source_ip].services[UnifiService.Access] = (
+                access_response.status == HTTPStatus.UNAUTHORIZED
+                if not isinstance(access_response, Exception)
+                else False
+            )
             if isinstance(system_response, Exception):
                 continue
             try:
