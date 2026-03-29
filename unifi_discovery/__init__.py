@@ -452,11 +452,13 @@ class AIOUnifiScanner:
             ClientResponse | Exception,
             ClientResponse | Exception,
         ]:
-            return await asyncio.gather(
-                session.get(f"https://{source_ip}{PROTECT_API_ENDPOINT}"),
-                session.get(f"https://{source_ip}{ACCESS_API_ENDPOINT}"),
-                session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
-                return_exceptions=True,
+            return tuple(
+                await asyncio.gather(
+                    session.get(f"https://{source_ip}{PROTECT_API_ENDPOINT}"),
+                    session.get(f"https://{source_ip}{ACCESS_API_ENDPOINT}"),
+                    session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
+                    return_exceptions=True,
+                )
             )
 
         all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
@@ -468,11 +470,15 @@ class AIOUnifiScanner:
                 if not isinstance(protect_response, Exception)
                 else False
             )
+            if not isinstance(protect_response, Exception):
+                protect_response.release()
             response_list[source_ip].services[UnifiService.Access] = (
                 access_response.status == HTTPStatus.UNAUTHORIZED
                 if not isinstance(access_response, Exception)
                 else False
             )
+            if not isinstance(access_response, Exception):
+                access_response.release()
             if isinstance(system_response, Exception):
                 continue
             try:
