@@ -445,7 +445,9 @@ class AIOUnifiScanner:
         if not console_ips:
             return
 
-        async def _probe_console(source_ip: str) -> tuple[
+        async def _probe_console(
+            source_ip: str,
+        ) -> tuple[
             ClientResponse | Exception,
             ClientResponse | Exception,
             ClientResponse | Exception,
@@ -457,9 +459,7 @@ class AIOUnifiScanner:
                 return_exceptions=True,
             )
 
-        all_results = await asyncio.gather(
-            *(_probe_console(ip) for ip in console_ips)
-        )
+        all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
         for source_ip, (protect_response, access_response, system_response) in zip(
             console_ips, all_results
         ):

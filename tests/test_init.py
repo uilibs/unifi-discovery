@@ -359,7 +359,9 @@ async def test_async_scanner_access_service_not_available(
     """Test scanner when Access service is not available."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
-    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", exception=ClientError)
+    mock_aioresponse.get(
+        "https://192.168.203.1/proxy/access/api", exception=ClientError
+    )
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
         payload={
