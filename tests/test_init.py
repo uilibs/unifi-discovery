@@ -358,7 +358,9 @@ async def test_async_scanner_access_service_not_available(
 ):
     """Test scanner when Access service is not available."""
     scanner = AIOUnifiScanner()
-    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get(
+        "https://192.168.203.1/proxy/protect/api", exception=ClientError
+    )
     mock_aioresponse.get(
         "https://192.168.203.1/proxy/access/api", exception=ClientError
     )
@@ -390,7 +392,7 @@ async def test_async_scanner_access_service_not_available(
             platform="UCKP",
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: False},
+            services={UnifiService.Protect: False, UnifiService.Access: False},
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
