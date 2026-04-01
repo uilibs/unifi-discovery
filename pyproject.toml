@@ -13,6 +13,7 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.14",
 ]
 packages = [
     { include = "unifi_discovery" },
