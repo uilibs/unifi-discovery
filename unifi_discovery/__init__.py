@@ -149,7 +149,7 @@ async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool
         await session.get(
             f"https://{target_ip}{SYSTEM_API_ENDPOINT}", timeout=API_TIMEOUT
         )
-    except (asyncio.TimeoutError, ClientError):
+    except (TimeoutError, ClientError):
         return False
     return True
 
@@ -302,7 +302,7 @@ class ArpSearch:
         )
         try:
             out_data, _ = await asyncio.wait_for(arp.communicate(), ARP_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if arp:
                 with suppress(TypeError):
                     await arp.kill()
@@ -401,7 +401,7 @@ class AIOUnifiScanner:
                 await asyncio.wait_for(
                     asyncio.shield(found_all_future), timeout=time_out
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if time.monotonic() >= quit_time:
                     return
                 # No response, send broadcast again in cast it got lost
@@ -471,7 +471,7 @@ class AIOUnifiScanner:
             except ContentTypeError as ex:
                 _LOGGER.debug("System endpoint not available for %s: %s", source_ip, ex)
                 continue
-            except (asyncio.TimeoutError, ClientError):
+            except (TimeoutError, ClientError):
                 _LOGGER.exception("Failed to get system info for %s", source_ip)
                 continue
             if not system:
