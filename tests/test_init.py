@@ -17,6 +17,8 @@ from unifi_discovery import (
     create_udp_socket,
 )
 
+CONSOLE_EPHEMERAL_PORT = 44306
+
 
 @pytest.fixture
 def mock_aioresponse():
@@ -102,7 +104,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     protocol.datagram_received(
         b"",
@@ -169,7 +171,7 @@ async def test_async_scanner_no_system_response(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     protocol.datagram_received(
         b"",
@@ -241,7 +243,7 @@ async def test_async_scanner_system_api_missing_mac(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
     assert scanner.found_devices == [
@@ -281,7 +283,7 @@ async def test_async_scanner_system_api_returns_html(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
     assert scanner.found_devices == [
@@ -328,7 +330,7 @@ async def test_async_scanner_access_service_detected(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
     assert scanner.found_devices == [
@@ -376,7 +378,7 @@ async def test_async_scanner_access_service_not_available(
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_REQUEST_PAYLOAD,
-        ("192.168.203.1", 44306),
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
     assert scanner.found_devices == [
