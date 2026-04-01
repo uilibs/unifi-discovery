@@ -13,11 +13,20 @@ from unifi_discovery import (
     UnifiDevice,
     UnifiDiscovery,
     UnifiService,
+    async_clear_cache,
     async_console_is_alive,
     create_udp_socket,
 )
 
 CONSOLE_EPHEMERAL_PORT = 44306
+
+
+@pytest.fixture(autouse=True)
+def _clear_scan_cache():
+    """Clear the module-level scan cache between tests."""
+    async_clear_cache()
+    yield
+    async_clear_cache()
 
 
 @pytest.fixture
@@ -87,6 +96,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
     """Test scanner with a broadcast."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=401)
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=401)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
@@ -132,7 +142,11 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             platform="UDMPROSE",
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: True},
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: True,
+                UnifiService.Access: True,
+            },
             direct_connect_domain="xyz.id.ui.direct",
             is_sso_enabled=True,
             is_single_user=True,
@@ -149,7 +163,11 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
             signature_version="1",
-            services={UnifiService.Protect: False, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: False,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -164,6 +182,7 @@ async def test_async_scanner_no_system_response(
     """Test scanner with a broadcast when the system api does not response."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
 
@@ -199,7 +218,11 @@ async def test_async_scanner_no_system_response(
             platform=None,
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -216,7 +239,11 @@ async def test_async_scanner_no_system_response(
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
             signature_version="1",
-            services={UnifiService.Protect: False, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: False,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -231,6 +258,7 @@ async def test_async_scanner_system_api_missing_mac(
     """Test scanner with a broadcast when the system api responds but no mac."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
@@ -259,7 +287,11 @@ async def test_async_scanner_system_api_missing_mac(
             platform="UCKP",
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -274,6 +306,7 @@ async def test_async_scanner_system_api_returns_html(
     """Test scanner with a broadcast when the system api responds but no mac."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
@@ -299,7 +332,11 @@ async def test_async_scanner_system_api_returns_html(
             platform=None,
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -314,6 +351,7 @@ async def test_async_scanner_access_service_detected(
     """Test scanner detects Access service."""
     scanner = AIOUnifiScanner()
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=401)
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=401)
     mock_aioresponse.get(
         "https://192.168.203.1/api/system",
@@ -346,7 +384,11 @@ async def test_async_scanner_access_service_detected(
             platform="UNVR",
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: True, UnifiService.Access: True},
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: True,
+                UnifiService.Access: True,
+            },
             direct_connect_domain="abc.id.ui.direct",
             is_sso_enabled=True,
             is_single_user=False,
@@ -362,6 +404,9 @@ async def test_async_scanner_access_service_not_available(
     scanner = AIOUnifiScanner()
     mock_aioresponse.get(
         "https://192.168.203.1/proxy/protect/api", exception=ClientError
+    )
+    mock_aioresponse.get(
+        "https://192.168.203.1/proxy/network/api", exception=ClientError
     )
     mock_aioresponse.get(
         "https://192.168.203.1/proxy/access/api", exception=ClientError
@@ -394,7 +439,11 @@ async def test_async_scanner_access_service_not_available(
             platform="UCKP",
             model=None,
             signature_version=None,
-            services={UnifiService.Protect: False, UnifiService.Access: False},
+            services={
+                UnifiService.Protect: False,
+                UnifiService.Network: False,
+                UnifiService.Access: False,
+            },
             direct_connect_domain=None,
             is_sso_enabled=None,
             is_single_user=None,
@@ -424,3 +473,35 @@ async def test_async_console_is_alive(mock_aioresponse):
         assert await async_console_is_alive(session, "1.2.3.2") is True
         assert await async_console_is_alive(session, "1.2.3.3") is False
         assert await async_console_is_alive(session, "1.2.3.4") is False
+
+
+@pytest.mark.asyncio
+async def test_async_scan_caches_broadcast_results(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test that broadcast scans are cached and not repeated."""
+    scanner1 = AIOUnifiScanner()
+    scanner2 = AIOUnifiScanner()
+
+    # First scan: set up protocol and send a discovery response
+    task = asyncio.ensure_future(scanner1.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+    result1 = await task
+
+    # Second scan: should return cached results without new network activity
+    result2 = await scanner2.async_scan(timeout=0.01)
+
+    assert result1 == result2
+    assert len(result1) == 1
+
+    # Mutating a cached device must raise since UnifiDevice is frozen
+    with pytest.raises(AttributeError):
+        result1[0].services = {}
