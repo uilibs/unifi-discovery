@@ -5,13 +5,14 @@ import logging
 import re
 import socket
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
-from typing import TYPE_CHECKING, Callable, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from aiohttp import (
     ClientError,
@@ -23,7 +24,13 @@ from aiohttp import (
 )
 
 if TYPE_CHECKING:
-    from pyroute2.iproute import IPRoute  # noqa: F401
+    from pyroute2.iproute import IPRoute
+
+
+class _ProbeResult(NamedTuple):
+    protect: ClientResponse | Exception
+    access: ClientResponse | Exception
+    system: ClientResponse | Exception
 
 
 class UnifiService(Enum):
@@ -59,6 +66,10 @@ API_TIMEOUT = ClientTimeout(total=5.0)
 SYSTEM_API_ENDPOINT = "/api/system"
 PROTECT_API_ENDPOINT = "/proxy/protect/api"
 ACCESS_API_ENDPOINT = "/proxy/access/api"
+SERVICE_ENDPOINTS: tuple[tuple[UnifiService, str], ...] = (
+    (UnifiService.Protect, PROTECT_API_ENDPOINT),
+    (UnifiService.Access, ACCESS_API_ENDPOINT),
+)
 
 # Some MAC addresses will drop the leading zero so
 # our mac validation must allow a single char
@@ -66,7 +77,7 @@ VALID_MAC_ADDRESS = re.compile("^([0-9A-Fa-f]{1,2}[:-]){5}([0-9A-Fa-f]{1,2})$")
 
 
 def mac_repr(data):
-    return ":".join(("%02x" % b) for b in data)
+    return ":".join(f"{b:02x}" for b in data)
 
 
 def _format_mac(mac: str) -> str:
@@ -74,7 +85,7 @@ def _format_mac(mac: str) -> str:
 
 
 def ip_repr(data):
-    return ".".join(("%d" % b) for b in data)
+    return ".".join(f"{b:d}" for b in data)
 
 
 def _fill_neighbor(neighbours, ip, mac):
@@ -114,7 +125,7 @@ FIELD_PARSERS = {
 
 def _services_dict():
     """Create an dict with known services."""
-    return {service: False for service in UnifiService}
+    return dict.fromkeys(UnifiService, False)
 
 
 @dataclass
@@ -139,7 +150,8 @@ class UnifiDevice:
 
 
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
-    """Check if a console is alive.
+    """
+    Check if a console is alive.
 
     The passed in session must not validate ssl.
     """
@@ -147,7 +159,7 @@ async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool
         await session.get(
             f"https://{target_ip}{SYSTEM_API_ENDPOINT}", timeout=API_TIMEOUT
         )
-    except (asyncio.TimeoutError, ClientError):
+    except (TimeoutError, ClientError):
         return False
     return True
 
@@ -300,7 +312,7 @@ class ArpSearch:
         )
         try:
             out_data, _ = await asyncio.wait_for(arp.communicate(), ARP_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if arp:
                 with suppress(TypeError):
                     await arp.kill()
@@ -360,7 +372,8 @@ class AIOUnifiScanner:
         address: str | None,
         response_list: dict[str, UnifiDevice],
     ) -> bool:
-        """Process a response.
+        """
+        Process a response.
 
         Returns True if processing should stop
         """
@@ -377,7 +390,7 @@ class AIOUnifiScanner:
         transport: asyncio.DatagramTransport,
         destination: tuple[str, int],
         timeout: int,
-        found_all_future: "asyncio.Future[bool]",
+        found_all_future: asyncio.Future[bool],
     ) -> None:
         """Send the scans."""
         self.source_ip = (
@@ -398,7 +411,7 @@ class AIOUnifiScanner:
                 await asyncio.wait_for(
                     asyncio.shield(found_all_future), timeout=time_out
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if time.monotonic() >= quit_time:
                     return
                 # No response, send broadcast again in cast it got lost
@@ -445,40 +458,28 @@ class AIOUnifiScanner:
         if not console_ips:
             return
 
-        async def _probe_console(
-            source_ip: str,
-        ) -> tuple[
-            ClientResponse | Exception,
-            ClientResponse | Exception,
-            ClientResponse | Exception,
-        ]:
-            return tuple(
-                await asyncio.gather(
-                    session.get(f"https://{source_ip}{PROTECT_API_ENDPOINT}"),
-                    session.get(f"https://{source_ip}{ACCESS_API_ENDPOINT}"),
-                    session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
-                    return_exceptions=True,
-                )
+        async def _probe_console(source_ip: str) -> _ProbeResult:
+            protect, access, system = await asyncio.gather(
+                *(
+                    session.get(f"https://{source_ip}{endpoint}")
+                    for _, endpoint in SERVICE_ENDPOINTS
+                ),
+                session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
+                return_exceptions=True,
             )
+            return _ProbeResult(protect, access, system)
 
         all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
-        for source_ip, (protect_response, access_response, system_response) in zip(
-            console_ips, all_results
-        ):
-            response_list[source_ip].services[UnifiService.Protect] = (
-                protect_response.status == HTTPStatus.UNAUTHORIZED
-                if not isinstance(protect_response, Exception)
-                else False
-            )
-            if not isinstance(protect_response, Exception):
-                protect_response.release()
-            response_list[source_ip].services[UnifiService.Access] = (
-                access_response.status == HTTPStatus.UNAUTHORIZED
-                if not isinstance(access_response, Exception)
-                else False
-            )
-            if not isinstance(access_response, Exception):
-                access_response.release()
+        for source_ip, result in zip(console_ips, all_results, strict=True):
+            for (service, _), response in zip(SERVICE_ENDPOINTS, result, strict=True):
+                response_list[source_ip].services[service] = (
+                    response.status == HTTPStatus.UNAUTHORIZED
+                    if not isinstance(response, Exception)
+                    else False
+                )
+                if not isinstance(response, Exception):
+                    response.release()
+            system_response = result.system
             if isinstance(system_response, Exception):
                 continue
             try:
@@ -486,7 +487,7 @@ class AIOUnifiScanner:
             except ContentTypeError as ex:
                 _LOGGER.debug("System endpoint not available for %s: %s", source_ip, ex)
                 continue
-            except (asyncio.TimeoutError, ClientError):
+            except (TimeoutError, ClientError):
                 _LOGGER.exception("Failed to get system info for %s", source_ip)
                 continue
             if not system:
