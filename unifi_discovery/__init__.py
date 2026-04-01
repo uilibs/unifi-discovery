@@ -28,8 +28,8 @@ if TYPE_CHECKING:
 
 
 class _ProbeResult(NamedTuple):
-    service_responses: tuple[ClientResponse | Exception, ...]
-    system: ClientResponse | Exception
+    service_responses: tuple[ClientResponse | BaseException, ...]
+    system: ClientResponse | BaseException
 
 
 class UnifiService(Enum):
@@ -473,15 +473,19 @@ class AIOUnifiScanner:
             for (service, _), response in zip(
                 SERVICE_ENDPOINTS, result.service_responses, strict=True
             ):
-                response_list[source_ip].services[service] = (
-                    response.status == HTTPStatus.UNAUTHORIZED
-                    if not isinstance(response, Exception)
-                    else False
-                )
-                if not isinstance(response, Exception):
+                if isinstance(response, BaseException):
+                    if isinstance(response, asyncio.CancelledError):
+                        raise response
+                    response_list[source_ip].services[service] = False
+                else:
+                    response_list[source_ip].services[service] = (
+                        response.status == HTTPStatus.UNAUTHORIZED
+                    )
                     response.release()
             system_response = result.system
-            if isinstance(system_response, Exception):
+            if isinstance(system_response, BaseException):
+                if isinstance(system_response, asyncio.CancelledError):
+                    raise system_response
                 continue
             try:
                 system = await system_response.json()
