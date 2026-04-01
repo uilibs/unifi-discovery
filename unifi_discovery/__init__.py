@@ -491,6 +491,8 @@ class AIOUnifiScanner:
             except (TimeoutError, ClientError):
                 _LOGGER.exception("Failed to get system info for %s", source_ip)
                 continue
+            finally:
+                system_response.release()
             if not system:
                 continue
             device = response_list[source_ip]
