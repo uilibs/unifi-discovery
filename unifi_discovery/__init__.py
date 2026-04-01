@@ -5,13 +5,14 @@ import logging
 import re
 import socket
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
-from typing import TYPE_CHECKING, Awaitable, Callable, cast
+from typing import TYPE_CHECKING, cast
 
 from aiohttp import (
     ClientError,
@@ -23,7 +24,7 @@ from aiohttp import (
 )
 
 if TYPE_CHECKING:
-    from pyroute2.iproute import IPRoute  # noqa: F401
+    from pyroute2.iproute import IPRoute
 
 
 class UnifiService(Enum):
@@ -66,7 +67,7 @@ VALID_MAC_ADDRESS = re.compile("^([0-9A-Fa-f]{1,2}[:-]){5}([0-9A-Fa-f]{1,2})$")
 
 
 def mac_repr(data):
-    return ":".join(("%02x" % b) for b in data)
+    return ":".join(f"{b:02x}" for b in data)
 
 
 def _format_mac(mac: str) -> str:
@@ -74,7 +75,7 @@ def _format_mac(mac: str) -> str:
 
 
 def ip_repr(data):
-    return ".".join(("%d" % b) for b in data)
+    return ".".join(f"{b:d}" for b in data)
 
 
 def _fill_neighbor(neighbours, ip, mac):
@@ -114,7 +115,7 @@ FIELD_PARSERS = {
 
 def _services_dict():
     """Create an dict with known services."""
-    return {service: False for service in UnifiService}
+    return dict.fromkeys(UnifiService, False)
 
 
 @dataclass
@@ -139,7 +140,8 @@ class UnifiDevice:
 
 
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
-    """Check if a console is alive.
+    """
+    Check if a console is alive.
 
     The passed in session must not validate ssl.
     """
@@ -192,7 +194,7 @@ def parse_ubnt_response(
     ):  # Check for a UBNT discovery request
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
         return UnifiDevice(**fields)  # type: ignore
-    elif payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
+    if payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
         # (first 3 bytes of the payload should be \x01\x00\x00)
         fields["signature_version"] = "1"  # this is not always correct
         field_parsers_packet_specific = {**FIELD_PARSERS}
@@ -269,7 +271,7 @@ class ArpSearch:
     def _get_iproute(self):
         """Get the iproute object."""
         with suppress(Exception):
-            from pyroute2.iproute import (  # pylint: disable=import-outside-toplevel
+            from pyroute2.iproute import (  # noqa: PLC0415
                 IPRoute,
             )
 
@@ -360,7 +362,8 @@ class AIOUnifiScanner:
         address: str | None,
         response_list: dict[str, UnifiDevice],
     ) -> bool:
-        """Process a response.
+        """
+        Process a response.
 
         Returns True if processing should stop
         """
@@ -377,7 +380,7 @@ class AIOUnifiScanner:
         transport: asyncio.DatagramTransport,
         destination: tuple[str, int],
         timeout: int,
-        found_all_future: "asyncio.Future[bool]",
+        found_all_future: asyncio.Future[bool],
     ) -> None:
         """Send the scans."""
         self.source_ip = (
