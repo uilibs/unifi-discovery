@@ -34,6 +34,7 @@ class _ProbeResult(NamedTuple):
 
 class UnifiService(Enum):
     Protect = auto()
+    Network = auto()
     Access = auto()
 
 
@@ -64,9 +65,11 @@ IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
 API_TIMEOUT = ClientTimeout(total=5.0)
 SYSTEM_API_ENDPOINT = "/api/system"
 PROTECT_API_ENDPOINT = "/proxy/protect/api"
+NETWORK_API_ENDPOINT = "/proxy/network/api"
 ACCESS_API_ENDPOINT = "/proxy/access/api"
 SERVICE_ENDPOINTS: tuple[tuple[UnifiService, str], ...] = (
     (UnifiService.Protect, PROTECT_API_ENDPOINT),
+    (UnifiService.Network, NETWORK_API_ENDPOINT),
     (UnifiService.Access, ACCESS_API_ENDPOINT),
 )
 
