@@ -2,6 +2,10 @@ import asyncio
 import contextlib
 from unittest.mock import MagicMock, patch
 
+import pytest
+from aiohttp import ClientError, ClientSession, ContentTypeError, TCPConnector
+from aioresponses import aioresponses
+
 from unifi_discovery import (
     DISCOVERY_PORT,
     UBNT_REQUEST_PAYLOAD,
@@ -12,10 +16,6 @@ from unifi_discovery import (
     async_console_is_alive,
     create_udp_socket,
 )
-
-import pytest
-from aiohttp import ClientError, ClientSession, ContentTypeError, TCPConnector
-from aioresponses import aioresponses
 
 
 @pytest.fixture
@@ -404,7 +404,7 @@ async def test_async_scanner_access_service_not_available(
 async def test_async_scanner_falls_back_to_any_source_port_if_socket_in_use():
     """Test port fallback."""
     hold_socket = create_udp_socket(DISCOVERY_PORT)
-    assert hold_socket.getsockname() == ("0.0.0.0", DISCOVERY_PORT)  # noqa: S104
+    assert hold_socket.getsockname() == ("0.0.0.0", DISCOVERY_PORT)
     random_socket = create_udp_socket(DISCOVERY_PORT)
     assert random_socket.getsockname() is not None
 
