@@ -13,11 +13,20 @@ from unifi_discovery import (
     UnifiDevice,
     UnifiDiscovery,
     UnifiService,
+    async_clear_cache,
     async_console_is_alive,
     create_udp_socket,
 )
 
 CONSOLE_EPHEMERAL_PORT = 44306
+
+
+@pytest.fixture(autouse=True)
+def _clear_scan_cache():
+    """Clear the module-level scan cache between tests."""
+    async_clear_cache()
+    yield
+    async_clear_cache()
 
 
 @pytest.fixture
@@ -464,3 +473,35 @@ async def test_async_console_is_alive(mock_aioresponse):
         assert await async_console_is_alive(session, "1.2.3.2") is True
         assert await async_console_is_alive(session, "1.2.3.3") is False
         assert await async_console_is_alive(session, "1.2.3.4") is False
+
+
+@pytest.mark.asyncio
+async def test_async_scan_caches_broadcast_results(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test that broadcast scans are cached and not repeated."""
+    scanner1 = AIOUnifiScanner()
+    scanner2 = AIOUnifiScanner()
+
+    # First scan: set up protocol and send a discovery response
+    task = asyncio.ensure_future(scanner1.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_REQUEST_PAYLOAD,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+    result1 = await task
+
+    # Second scan: should return cached results without new network activity
+    result2 = await scanner2.async_scan(timeout=0.01)
+
+    assert result1 == result2
+    assert len(result1) == 1
+
+    # Mutating a cached device must raise since UnifiDevice is frozen
+    with pytest.raises(AttributeError):
+        result1[0].services = {}

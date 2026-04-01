@@ -63,6 +63,7 @@ ARP_TIMEOUT = 10
 IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
 
 API_TIMEOUT = ClientTimeout(total=5.0)
+SCAN_CACHE_TTL = 300  # seconds to cache broadcast scan results
 SYSTEM_API_ENDPOINT = "/api/system"
 PROTECT_API_ENDPOINT = "/proxy/protect/api"
 NETWORK_API_ENDPOINT = "/proxy/network/api"
@@ -130,7 +131,7 @@ def _services_dict():
     return dict.fromkeys(UnifiService, False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class UnifiDevice:
     """A device discovered."""
 
@@ -355,6 +356,33 @@ class ArpSearch:
         return neighbours
 
 
+# Module-level scan cache and lock for deduplication across instances
+_scan_cache: tuple[float, list[UnifiDevice]] | None = None
+_scan_lock: asyncio.Lock | None = None
+_scan_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_scan_lock() -> asyncio.Lock:
+    """Get or create the module-level scan lock for the current event loop."""
+    global _scan_lock, _scan_lock_loop  # noqa: PLW0603
+    loop = asyncio.get_running_loop()
+    if _scan_lock is None or _scan_lock_loop is not loop:
+        _scan_lock = asyncio.Lock()
+        _scan_lock_loop = loop
+    return _scan_lock
+
+
+def _copy_devices(devices: list[UnifiDevice]) -> list[UnifiDevice]:
+    """Return a shallow copy of the device list. Devices are frozen and safe to share."""
+    return list(devices)
+
+
+def async_clear_cache() -> None:
+    """Clear the scan result cache."""
+    global _scan_cache  # noqa: PLW0603
+    _scan_cache = None
+
+
 class AIOUnifiScanner:
     """A unifi discovery scanner."""
 
@@ -473,18 +501,22 @@ class AIOUnifiScanner:
 
         all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
         for source_ip, result in zip(console_ips, all_results, strict=True):
+            services: dict[UnifiService, bool] = {}
             for (service, _), response in zip(
                 SERVICE_ENDPOINTS, result.service_responses, strict=True
             ):
                 if isinstance(response, BaseException):
                     if isinstance(response, asyncio.CancelledError):
                         raise response
-                    response_list[source_ip].services[service] = False
+                    services[service] = False
                 else:
-                    response_list[source_ip].services[service] = (
+                    services[service] = (
                         response.status == HTTPStatus.UNAUTHORIZED
                     )
                     response.release()
+            response_list[source_ip] = replace(
+                response_list[source_ip], services=services
+            )
             system_response = result.system
             if isinstance(system_response, BaseException):
                 if isinstance(system_response, asyncio.CancelledError):
@@ -520,6 +552,35 @@ class AIOUnifiScanner:
         self, timeout: int = 31, address: str | None = None
     ) -> list[UnifiDevice]:
         """Discover on port 10001."""
+        # Targeted scans bypass the cache
+        if address is not None:
+            return await self._async_do_scan(timeout, address)
+
+        global _scan_cache  # noqa: PLW0603
+        now = time.monotonic()
+
+        # Return cached results if still fresh
+        if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
+            self.found_devices = _copy_devices(_scan_cache[1])
+            return self.found_devices
+
+        lock = _get_scan_lock()
+        async with lock:
+            # Re-check after acquiring lock (another caller may have filled cache)
+            now = time.monotonic()
+            if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
+                self.found_devices = _copy_devices(_scan_cache[1])
+                return self.found_devices
+
+            result = await self._async_do_scan(timeout, address)
+            _scan_cache = (time.monotonic(), result)
+            self.found_devices = _copy_devices(result)
+            return self.found_devices
+
+    async def _async_do_scan(
+        self, timeout: int = 31, address: str | None = None
+    ) -> list[UnifiDevice]:
+        """Perform the actual network scan."""
         sock = create_udp_socket(DISCOVERY_PORT)
         destination = self._destination_from_address(address)
         found_all_future: asyncio.Future[bool] = asyncio.Future()
