@@ -510,9 +510,7 @@ class AIOUnifiScanner:
                         raise response
                     services[service] = False
                 else:
-                    services[service] = (
-                        response.status == HTTPStatus.UNAUTHORIZED
-                    )
+                    services[service] = response.status == HTTPStatus.UNAUTHORIZED
                     response.release()
             response_list[source_ip] = replace(
                 response_list[source_ip], services=services
