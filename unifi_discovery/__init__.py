@@ -203,7 +203,7 @@ def parse_ubnt_response(
     ):  # Check for a UBNT discovery request
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
         return UnifiDevice(**fields)  # type: ignore
-    elif payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
+    if payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
         # (first 3 bytes of the payload should be \x01\x00\x00)
         fields["signature_version"] = "1"  # this is not always correct
         field_parsers_packet_specific = {**FIELD_PARSERS}
@@ -280,7 +280,7 @@ class ArpSearch:
     def _get_iproute(self):
         """Get the iproute object."""
         with suppress(Exception):
-            from pyroute2.iproute import (  # pylint: disable=import-outside-toplevel
+            from pyroute2.iproute import (  # noqa: PLC0415
                 IPRoute,
             )
 
