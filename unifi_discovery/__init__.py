@@ -28,8 +28,7 @@ if TYPE_CHECKING:
 
 
 class _ProbeResult(NamedTuple):
-    protect: ClientResponse | Exception
-    access: ClientResponse | Exception
+    service_responses: tuple[ClientResponse | Exception, ...]
     system: ClientResponse | Exception
 
 
@@ -459,7 +458,7 @@ class AIOUnifiScanner:
             return
 
         async def _probe_console(source_ip: str) -> _ProbeResult:
-            protect, access, system = await asyncio.gather(
+            *service_responses, system = await asyncio.gather(
                 *(
                     session.get(f"https://{source_ip}{endpoint}")
                     for _, endpoint in SERVICE_ENDPOINTS
@@ -467,11 +466,13 @@ class AIOUnifiScanner:
                 session.get(f"https://{source_ip}{SYSTEM_API_ENDPOINT}"),
                 return_exceptions=True,
             )
-            return _ProbeResult(protect, access, system)
+            return _ProbeResult(tuple(service_responses), system)
 
         all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
         for source_ip, result in zip(console_ips, all_results, strict=True):
-            for (service, _), response in zip(SERVICE_ENDPOINTS, result, strict=True):
+            for (service, _), response in zip(
+                SERVICE_ENDPOINTS, result.service_responses, strict=True
+            ):
                 response_list[source_ip].services[service] = (
                     response.status == HTTPStatus.UNAUTHORIZED
                     if not isinstance(response, Exception)
