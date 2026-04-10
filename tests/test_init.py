@@ -70,7 +70,7 @@ async def test_async_scanner_specific_address(
     """Test scanner with a specific address."""
     scanner = AIOUnifiScanner()
     task = asyncio.ensure_future(
-        scanner.async_scan(timeout=10, address="192.168.212.1")
+        scanner.async_scan(timeout=10, address="192.168.212.1", consoles_only=False)
     )
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
@@ -114,7 +114,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
         },
     )
 
-    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01, consoles_only=False))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_V1_REQUEST,
@@ -190,7 +190,7 @@ async def test_async_scanner_no_system_response(
     mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
     mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
 
-    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01, consoles_only=False))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_V1_REQUEST,
@@ -423,7 +423,7 @@ async def test_async_scanner_access_service_not_available(
             "mac": "28704E522AFF",
         },
     )
-    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01, consoles_only=False))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_V1_REQUEST,
@@ -509,6 +509,43 @@ async def test_async_scan_caches_broadcast_results(
     # Mutating a cached device must raise since UnifiDevice is frozen
     with pytest.raises(AttributeError):
         result1[0].services = {}
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_consoles_only_filters(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test that consoles_only=True (default) filters out non-console devices."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get(
+        "https://192.168.203.1/api/system",
+        payload={
+            "hardware": {"shortname": "UDMPROSE"},
+            "name": "UDM Pro SE",
+            "mac": "245A4CDD6616",
+        },
+    )
+
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    # Console echo (detected as console)
+    protocol.datagram_received(
+        UBNT_V1_REQUEST,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    # Non-console V1 device (camera)
+    protocol.datagram_received(
+        b"\x01\x00\x00\x8e\x02\x00\n\xe0c\xda\x00^\x08\xc0\xa8\xd4\x01\x01\x00\x06\xe0c\xda\x00^\x08\n\x00\x04\x00\x13\xe60\x0b\x00\x04Gate\x0c\x00\nUVC G4 Pro\x17\x00\x04\x00\x00\x00\x00\x03\x00'UVC.S5L.v4.46.18.67.ceacbaa.211202.1017\x10\x00\x02c\xa5 \x00$32f695ba-835b-5822-bc54-e290e1789ff1",
+        ("192.168.212.1", DISCOVERY_PORT),
+    )
+    await task
+    # Default: only console returned
+    assert len(scanner.found_devices) == 1
+    assert scanner.found_devices[0].source_ip == "192.168.203.1"
+    assert scanner.found_devices[0].services[UnifiService.Protect] is True
 
 
 @pytest.mark.asyncio

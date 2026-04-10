@@ -523,6 +523,23 @@ def async_clear_cache() -> None:
     _scan_cache = None
 
 
+def _is_console(device: UnifiDevice) -> bool:
+    """Return True if the device is a UniFi OS console."""
+    return (
+        device.unifi_os_version is not None
+        or any(device.services.values())
+    )
+
+
+def _filter_devices(
+    devices: list[UnifiDevice], consoles_only: bool
+) -> list[UnifiDevice]:
+    """Optionally filter to consoles only."""
+    if not consoles_only:
+        return devices
+    return [d for d in devices if _is_console(d)]
+
+
 class AIOUnifiScanner:
     """A unifi discovery scanner."""
 
@@ -705,19 +722,32 @@ class AIOUnifiScanner:
             )
 
     async def async_scan(
-        self, timeout: int = 31, address: str | None = None
+        self,
+        timeout: int = 31,
+        address: str | None = None,
+        consoles_only: bool = True,
     ) -> list[UnifiDevice]:
-        """Discover on port 10001."""
+        """Discover on port 10001.
+
+        Args:
+            timeout: Scan duration in seconds.
+            address: Target a specific IP instead of broadcast.
+            consoles_only: If True (default), only return UniFi OS consoles.
+        """
         # Targeted scans bypass the cache
         if address is not None:
-            return await self._async_do_scan(timeout, address)
+            result = await self._async_do_scan(timeout, address)
+            self.found_devices = _filter_devices(result, consoles_only)
+            return self.found_devices
 
         global _scan_cache  # noqa: PLW0603
         now = time.monotonic()
 
         # Return cached results if still fresh
         if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
-            self.found_devices = _copy_devices(_scan_cache[1])
+            self.found_devices = _filter_devices(
+                _copy_devices(_scan_cache[1]), consoles_only
+            )
             return self.found_devices
 
         lock = _get_scan_lock()
@@ -725,12 +755,16 @@ class AIOUnifiScanner:
             # Re-check after acquiring lock (another caller may have filled cache)
             now = time.monotonic()
             if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
-                self.found_devices = _copy_devices(_scan_cache[1])
+                self.found_devices = _filter_devices(
+                    _copy_devices(_scan_cache[1]), consoles_only
+                )
                 return self.found_devices
 
             result = await self._async_do_scan(timeout, address)
             _scan_cache = (time.monotonic(), result)
-            self.found_devices = _copy_devices(result)
+            self.found_devices = _filter_devices(
+                _copy_devices(result), consoles_only
+            )
             return self.found_devices
 
     async def _async_do_scan(
