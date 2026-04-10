@@ -142,7 +142,6 @@ FIELD_PARSERS_V2 = {
 }
 
 
-
 def _services_dict():
     """Create an dict with known services."""
     return dict.fromkeys(UnifiService, False)
@@ -203,7 +202,8 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
 def _deduplicate_by_mac(
     response_list: dict[str, UnifiDevice],
 ) -> dict[str, UnifiDevice]:
-    """Deduplicate devices that share the same hw_addr.
+    """
+    Deduplicate devices that share the same hw_addr.
 
     Consoles respond from every VLAN interface, creating multiple entries
     with the same MAC but different source IPs. We keep the entry with the
@@ -231,8 +231,7 @@ def _deduplicate_by_mac(
             return sum(
                 1
                 for f in d.__dataclass_fields__
-                if f not in ("source_ip", "services")
-                and getattr(d, f) is not None
+                if f not in ("source_ip", "services") and getattr(d, f) is not None
             )
 
         ips.sort(key=_richness, reverse=True)
@@ -525,10 +524,7 @@ def async_clear_cache() -> None:
 
 def _is_console(device: UnifiDevice) -> bool:
     """Return True if the device is a UniFi OS console."""
-    return (
-        device.version is not None
-        or any(device.services.values())
-    )
+    return device.version is not None or any(device.services.values())
 
 
 def _filter_devices(
@@ -657,8 +653,7 @@ class AIOUnifiScanner:
         console_ips: list[str] = [
             device.source_ip
             for device in response_list.values()
-            if device.signature_version is None
-            or device.version is not None
+            if device.signature_version is None or device.version is not None
         ]
         if not console_ips:
             return
@@ -727,12 +722,14 @@ class AIOUnifiScanner:
         address: str | None = None,
         consoles_only: bool = True,
     ) -> list[UnifiDevice]:
-        """Discover on port 10001.
+        """
+        Discover on port 10001.
 
         Args:
             timeout: Scan duration in seconds.
             address: Target a specific IP instead of broadcast.
             consoles_only: If True (default), only return UniFi OS consoles.
+
         """
         # Targeted scans bypass the cache
         if address is not None:
@@ -762,9 +759,7 @@ class AIOUnifiScanner:
 
             result = await self._async_do_scan(timeout, address)
             _scan_cache = (time.monotonic(), result)
-            self.found_devices = _filter_devices(
-                _copy_devices(result), consoles_only
-            )
+            self.found_devices = _filter_devices(_copy_devices(result), consoles_only)
             return self.found_devices
 
     async def _async_do_scan(
@@ -812,9 +807,7 @@ class AIOUnifiScanner:
                         asyncio.DatagramTransport, mcast_transport
                     )
                 except OSError:
-                    _LOGGER.debug(
-                        "Failed to register multicast endpoint, skipping"
-                    )
+                    _LOGGER.debug("Failed to register multicast endpoint, skipping")
                     mcast_sock.close()
 
         try:

@@ -552,7 +552,8 @@ async def test_async_scanner_consoles_only_filters(
 async def test_async_scanner_console_v1_echo_plus_v2_response(
     mock_discovery_aio_protocol, mock_aioresponse
 ):
-    """Test console detected via V1 echo still gets service-probed after V2 merge.
+    """
+    Test console detected via V1 echo still gets service-probed after V2 merge.
 
     Consoles echo the V1 request from an ephemeral port (signature_version=None)
     AND respond to V2 requests with product_name/version. After merging,
@@ -612,8 +613,10 @@ V2_RESPONSE = (
     b"\x00\x27"  # data_len=39
     b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr
     b"\x15\x00\x09UDMPROMAX"  # 0x15 product_name
-    b"\x16\x00\x07" b"10.3.47"  # 0x16 version
-    b"\x03\x00\x05" b"7.0.0"  # 0x03 fw_version
+    b"\x16\x00\x07"
+    b"10.3.47"  # 0x16 version
+    b"\x03\x00\x05"
+    b"7.0.0"  # 0x03 fw_version
 )
 
 # --- V0 response test payload (UNVR-like) ---
@@ -624,7 +627,8 @@ V0_RESPONSE = (
     b"\x00\x1a"  # data_len=26
     b"\x01\x00\x06\xe4\x38\x83\x32\xc9\xb1"  # 0x01 hw_addr
     b"\x15\x00\x04UNVR"  # 0x15 product_name
-    b"\x16\x00\x07" b"v4.2.16"  # 0x16 version
+    b"\x16\x00\x07"
+    b"v4.2.16"  # 0x16 version
 )
 
 # --- V2 response with unknown fields (seq, source_mac, is_default) ---
@@ -729,7 +733,8 @@ def test_parse_response_truncated_payload():
 
 
 def test_parse_v2_echo_rejected():
-    """Test that a V2 request echo (command=8) is not parsed as a response.
+    """
+    Test that a V2 request echo (command=8) is not parsed as a response.
 
     Consoles echo incoming packets from an ephemeral port. Our V2 request
     (version=2, command=8, data_len=0) must not be mistaken for a V2 response.
