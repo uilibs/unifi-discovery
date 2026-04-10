@@ -41,6 +41,7 @@ class UnifiService(Enum):
 _LOGGER = logging.getLogger(__name__)
 
 BROADCAST_IP = "255.255.255.255"
+MULTICAST_IP = "233.89.188.1"
 MDNS_TARGET_IP = "224.0.0.251"
 PUBLIC_TARGET_IP = "1.1.1.1"
 
@@ -54,8 +55,8 @@ IGNORE_NETWORKS = (
 
 
 # UBNT discovery packet payload and reply signature
-UBNT_REQUEST_PAYLOAD = b"\x01\x00\x00\x00"
-UBNT_V1_SIGNATURE = b"\x01\x00\x00"
+UBNT_V1_REQUEST = b"\x01\x00\x00\x00"
+UBNT_V2_REQUEST = b"\x02\x08\x00\x00"  # version=2, command=8, data_len=0
 DISCOVERY_PORT = 10001
 BROADCAST_FREQUENCY = 3
 ARP_CACHE_POPULATE_TIME = 10
@@ -109,7 +110,7 @@ def _fill_neighbor(neighbours, ip, mac):
 
 # field type -> (field name; parsing function (bytes->str); \
 #                is it expected to be seen multiple times?)
-FIELD_PARSERS = {
+FIELD_PARSERS_V1 = {
     0x01: ("hw_addr", mac_repr, False),
     0x02: (
         "ip_info",
@@ -124,6 +125,22 @@ FIELD_PARSERS = {
     0x0C: ("platform", bytes.decode, False),
     0x14: ("model", bytes.decode, False),
 }
+
+# V2/V0 responses use a different set of field IDs.
+# Known protocol fields not mapped to UnifiDevice: 0x12 (seq), 0x13 (source_mac),
+# 0x17 (is_default). These are parsed by the device firmware but not exposed here.
+FIELD_PARSERS_V2 = {
+    0x01: ("hw_addr", mac_repr, False),
+    0x02: (
+        "ip_info",
+        lambda data: f"{mac_repr(data[0:6])};{ip_repr(data[6:10])}",
+        True,
+    ),
+    0x03: ("fw_version", bytes.decode, False),
+    0x15: ("product_name", bytes.decode, False),
+    0x16: ("unifi_os_version", bytes.decode, False),
+}
+
 
 
 def _services_dict():
@@ -141,7 +158,7 @@ class UnifiDevice:
     addr_entry: str | None = None
     fw_version: str | None = None
     mac_address: str | None = None
-    uptime: str | None = None
+    uptime: int | None = None
     hostname: str | None = None
     platform: str | None = None
     model: str | None = None
@@ -150,6 +167,37 @@ class UnifiDevice:
     direct_connect_domain: str | None = None
     is_sso_enabled: bool | None = None
     is_single_user: bool | None = None
+    product_name: str | None = None
+    unifi_os_version: str | None = None
+
+
+def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
+    """
+    Merge two device records for the same IP, filling None gaps from new.
+
+    Order-independent: only updates fields on *existing* that are None
+    with non-None values from *new*. The ip_info lists are combined.
+    """
+    updates: dict[str, object] = {}
+    for f in existing.__dataclass_fields__:
+        if f in ("source_ip", "services"):
+            continue
+        old_val = getattr(existing, f)
+        new_val = getattr(new, f)
+        if f == "ip_info":
+            if old_val and new_val:
+                seen = set(old_val)
+                combined = list(old_val)
+                for v in new_val:
+                    if v not in seen:
+                        combined.append(v)
+                        seen.add(v)
+                updates[f] = combined
+            elif old_val is None and new_val is not None:
+                updates[f] = new_val
+        elif old_val is None and new_val is not None:
+            updates[f] = new_val
+    return replace(existing, **updates)
 
 
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
@@ -186,9 +234,12 @@ def async_get_source_ip(target_ip: str) -> str | None:
 
 def iter_fields(data, _len):
     pointer = 0
-    while pointer < _len:
+    data_end = min(_len, len(data))
+    while pointer + 3 <= data_end:
         fieldType, fieldLen = unpack(">BH", data[pointer : pointer + 3])
         pointer += 3
+        if pointer + fieldLen > data_end:
+            break
         fieldData = data[pointer : pointer + fieldLen]
         pointer += fieldLen
         yield fieldType, fieldData
@@ -203,37 +254,51 @@ def parse_ubnt_response(
     if payload is None or len(payload) < 4:
         return None
     if (
-        payload[0:4] == UBNT_REQUEST_PAYLOAD and from_address[1] != DISCOVERY_PORT
+        payload[0:4] == UBNT_V1_REQUEST and from_address[1] != DISCOVERY_PORT
     ):  # Check for a UBNT discovery request
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
         return UnifiDevice(**fields)  # type: ignore
-    if payload[0:3] == UBNT_V1_SIGNATURE:  # Check for a valid UBNT discovery reply
-        # (first 3 bytes of the payload should be \x01\x00\x00)
-        fields["signature_version"] = "1"  # this is not always correct
-        field_parsers_packet_specific = {**FIELD_PARSERS}
+
+    version = payload[0]
+    command = payload[1]
+    data_len = unpack(">H", payload[2:4])[0]
+
+    if version == 1 and command == 0:
+        fields["signature_version"] = "1"
+        field_parsers = FIELD_PARSERS_V1
+    elif version == 2 and command in (6, 9):
+        fields["signature_version"] = "2"
+        field_parsers = FIELD_PARSERS_V2
+    elif version == 0 and data_len > 0:
+        # Some devices (e.g. UNVR) respond with version 0
+        fields["signature_version"] = "0"
+        field_parsers = FIELD_PARSERS_V2
     else:
         return None
 
-    # Walk the reply payload, staring from offset 04
+    # Walk the reply payload, starting from offset 04
     # (just after reply signature and payload size).
-    # Take into account the payload length in offset 3
-    for field_type, field_data in iter_fields(payload[4:], payload[3]):
-        if field_type not in field_parsers_packet_specific:
+    for field_type, field_data in iter_fields(payload[4:], data_len):
+        if field_type not in field_parsers:
             continue
 
         # Parse the field and store in Device
-        field_name, field_parser, is_many = field_parsers_packet_specific[field_type]
-        value = field_parser(field_data)  # type: ignore
+        field_name, field_parser, is_many = field_parsers[field_type]
+        try:
+            value = field_parser(field_data)  # type: ignore
+        except Exception:
+            continue
         if is_many:
             if field_name not in fields:
                 fields[field_name] = []
-            field_list = fields[field_name]
-            assert not isinstance(field_list, str)
+            field_list = cast(list, fields[field_name])
             field_list.append(value)
         else:
             fields[field_name] = value
 
-    return UnifiDevice(**fields)  # type: ignore
+    # Filter to only fields that exist on UnifiDevice
+    valid = UnifiDevice.__dataclass_fields__
+    return UnifiDevice(**{k: v for k, v in fields.items() if k in valid})  # type: ignore
 
 
 def create_udp_socket(discovery_port: int) -> socket.socket:
@@ -247,6 +312,24 @@ def create_udp_socket(discovery_port: int) -> socket.socket:
     except OSError as err:
         _LOGGER.debug("Port %s is not available: %s", discovery_port, err)
         sock.bind(("", 0))
+    sock.setblocking(False)
+    return sock
+
+
+def create_multicast_socket(discovery_port: int) -> socket.socket:
+    """Create a udp socket that joins the UniFi multicast group."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("", discovery_port))
+    except OSError as err:
+        _LOGGER.debug("Multicast port %s is not available: %s", discovery_port, err)
+        sock.bind(("", 0))
+    mreq = socket.inet_aton(MULTICAST_IP) + socket.inet_aton("0.0.0.0")
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    except OSError as err:
+        _LOGGER.debug("Failed to join multicast group %s: %s", MULTICAST_IP, err)
     sock.setblocking(False)
     return sock
 
@@ -411,7 +494,12 @@ class AIOUnifiScanner:
             return False
         response = parse_ubnt_response(data, from_address)
         if response is not None:
-            response_list[from_address[0]] = response
+            existing = response_list.get(from_address[0])
+            if existing is None:
+                response_list[from_address[0]] = response
+            else:
+                # Merge V1+V2 responses: fill None gaps from new response
+                response_list[from_address[0]] = _merge_devices(existing, response)
             return from_address[0] == address
         return False
 
@@ -421,6 +509,7 @@ class AIOUnifiScanner:
         destination: tuple[str, int],
         timeout: int,
         found_all_future: asyncio.Future[bool],
+        multicast_transport: asyncio.DatagramTransport | None = None,
     ) -> None:
         """Send the scans."""
         self.source_ip = (
@@ -429,8 +518,20 @@ class AIOUnifiScanner:
             or async_get_source_ip(PUBLIC_TARGET_IP)
         )
         _LOGGER.debug("source_ip: %s", self.source_ip)
-        _LOGGER.debug("discover: %s => %s", destination, UBNT_REQUEST_PAYLOAD)
-        transport.sendto(UBNT_REQUEST_PAYLOAD, destination)
+
+        multicast_dest = (MULTICAST_IP, DISCOVERY_PORT)
+
+        def _send_all() -> None:
+            """Send V1+V2 on broadcast and multicast."""
+            _LOGGER.debug("discover: %s => V1+V2", destination)
+            transport.sendto(UBNT_V1_REQUEST, destination)
+            transport.sendto(UBNT_V2_REQUEST, destination)
+            if multicast_transport is not None:
+                _LOGGER.debug("discover: %s => V1+V2 (multicast)", multicast_dest)
+                multicast_transport.sendto(UBNT_V1_REQUEST, multicast_dest)
+                multicast_transport.sendto(UBNT_V2_REQUEST, multicast_dest)
+
+        _send_all()
         quit_time = time.monotonic() + timeout
         remain_time = float(timeout)
         while True:
@@ -444,9 +545,8 @@ class AIOUnifiScanner:
             except TimeoutError:
                 if time.monotonic() >= quit_time:
                     return
-                # No response, send broadcast again in cast it got lost
-                _LOGGER.debug("discover: %s => %s", destination, UBNT_REQUEST_PAYLOAD)
-                transport.sendto(UBNT_REQUEST_PAYLOAD, destination)
+                # No response, send again in case it got lost
+                _send_all()
             else:
                 return  # found_all
             remain_time = quit_time - time.monotonic()
@@ -484,6 +584,7 @@ class AIOUnifiScanner:
             device.source_ip
             for device in response_list.values()
             if device.signature_version is None
+            or device.unifi_os_version is not None
         ]
         if not console_ips:
             return
@@ -587,24 +688,56 @@ class AIOUnifiScanner:
         def _on_response(data: bytes, addr: tuple[str, int]) -> None:
             _LOGGER.debug("discover: %s <= %s", addr, data)
             if self._process_response(data, addr, address, response_list):
-                found_all_future.set_result(True)
+                if not found_all_future.done():
+                    found_all_future.set_result(True)
 
-        transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+        loop = asyncio.get_running_loop()
+
+        transport, _ = await loop.create_datagram_endpoint(
             lambda: UnifiDiscovery(
                 destination=destination,
                 on_response=_on_response,
             ),
             sock=sock,
         )
+
+        # Create multicast socket for discovering devices that only respond to multicast
+        multicast_transport: asyncio.DatagramTransport | None = None
+        if address is None:
+            try:
+                mcast_sock = create_multicast_socket(DISCOVERY_PORT)
+            except OSError:
+                _LOGGER.debug("Failed to create multicast socket, skipping")
+            else:
+                try:
+                    mcast_transport, _ = await loop.create_datagram_endpoint(
+                        lambda: UnifiDiscovery(
+                            destination=(MULTICAST_IP, DISCOVERY_PORT),
+                            on_response=_on_response,
+                        ),
+                        sock=mcast_sock,
+                    )
+                    multicast_transport = cast(
+                        asyncio.DatagramTransport, mcast_transport
+                    )
+                except OSError:
+                    _LOGGER.debug(
+                        "Failed to register multicast endpoint, skipping"
+                    )
+                    mcast_sock.close()
+
         try:
             await self._async_run_scan(
                 cast(asyncio.DatagramTransport, transport),
                 destination,
                 timeout,
                 found_all_future,
+                multicast_transport=multicast_transport,
             )
         finally:
             transport.close()
+            if multicast_transport is not None:
+                multicast_transport.close()
 
         await self._probe_services_and_system(response_list)
         await self._add_missing_hw_addresses(response_list)

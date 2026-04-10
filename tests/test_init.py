@@ -3,12 +3,13 @@ import contextlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+import pytest_asyncio
 from aiohttp import ClientError, ClientSession, ContentTypeError, TCPConnector
 from aioresponses import aioresponses
 
 from unifi_discovery import (
     DISCOVERY_PORT,
-    UBNT_REQUEST_PAYLOAD,
+    UBNT_V1_REQUEST,
     AIOUnifiScanner,
     UnifiDevice,
     UnifiDiscovery,
@@ -16,6 +17,7 @@ from unifi_discovery import (
     async_clear_cache,
     async_console_is_alive,
     create_udp_socket,
+    parse_ubnt_response,
 )
 
 CONSOLE_EPHEMERAL_PORT = 44306
@@ -35,7 +37,7 @@ def mock_aioresponse():
         yield m
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_discovery_aio_protocol():
     """Fixture to mock an asyncio connection."""
     loop = asyncio.get_running_loop()
@@ -51,6 +53,8 @@ async def mock_discovery_aio_protocol():
         protocol: UnifiDiscovery = func()
         transport = MagicMock()
         protocol.connection_made(transport)
+        if sock is not None:
+            sock.close()
         with contextlib.suppress(asyncio.InvalidStateError):
             future.set_result((transport, protocol))
         return transport, protocol
@@ -113,7 +117,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     protocol.datagram_received(
@@ -189,7 +193,7 @@ async def test_async_scanner_no_system_response(
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     protocol.datagram_received(
@@ -270,7 +274,7 @@ async def test_async_scanner_system_api_missing_mac(
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
@@ -315,7 +319,7 @@ async def test_async_scanner_system_api_returns_html(
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
@@ -367,7 +371,7 @@ async def test_async_scanner_access_service_detected(
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
@@ -422,7 +426,7 @@ async def test_async_scanner_access_service_not_available(
     task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     await task
@@ -487,7 +491,7 @@ async def test_async_scan_caches_broadcast_results(
     task = asyncio.ensure_future(scanner1.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
-        UBNT_REQUEST_PAYLOAD,
+        UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
     mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
@@ -505,3 +509,257 @@ async def test_async_scan_caches_broadcast_results(
     # Mutating a cached device must raise since UnifiDevice is frozen
     with pytest.raises(AttributeError):
         result1[0].services = {}
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_console_v1_echo_plus_v2_response(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """Test console detected via V1 echo still gets service-probed after V2 merge.
+
+    Consoles echo the V1 request from an ephemeral port (signature_version=None)
+    AND respond to V2 requests with product_name/unifi_os_version. After merging,
+    the console must still be identified and probed for services.
+    """
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.7.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.7.1/proxy/network/api", status=401)
+    mock_aioresponse.get("https://192.168.7.1/proxy/access/api", status=404)
+    mock_aioresponse.get(
+        "https://192.168.7.1/api/system",
+        payload={
+            "hardware": {"shortname": "UDMPROMAX"},
+            "name": "UDM Pro Max",
+            "mac": "E063DA005E08",
+            "isSingleUser": True,
+            "isSsoEnabled": True,
+            "directConnectDomain": "test.id.ui.direct",
+        },
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    # Console echoes V1 request from ephemeral port (creates device with sig=None)
+    protocol.datagram_received(
+        UBNT_V1_REQUEST,
+        ("192.168.7.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    # Console also responds to V2 with real fields (merges into same device)
+    protocol.datagram_received(
+        V2_RESPONSE,
+        ("192.168.7.1", DISCOVERY_PORT),
+    )
+    await task
+    assert len(scanner.found_devices) == 1
+    device = scanner.found_devices[0]
+    # V2 fields merged in
+    assert device.product_name == "UDMPROMAX"
+    assert device.unifi_os_version == "10.3.47"
+    # Services were probed (the critical assertion — would fail without the fix)
+    assert device.services == {
+        UnifiService.Protect: True,
+        UnifiService.Network: True,
+        UnifiService.Access: False,
+    }
+    # System API data merged
+    assert device.hostname == "UDM-Pro-Max"
+    assert device.platform == "UDMPROMAX"
+    assert device.hw_addr == "e0:63:da:00:5e:08"
+    assert device.direct_connect_domain == "test.id.ui.direct"
+
+
+# --- V2 response test payload ---
+# Version=2, Command=9, data_len=39
+# Fields: hw_addr(0x01), product_name(0x15), unifi_os_version(0x16), fw_version(0x03)
+V2_RESPONSE = (
+    b"\x02\x09"  # version=2, command=9
+    b"\x00\x27"  # data_len=39
+    b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr
+    b"\x15\x00\x09UDMPROMAX"  # 0x15 product_name
+    b"\x16\x00\x07" b"10.3.47"  # 0x16 unifi_os_version
+    b"\x03\x00\x05" b"7.0.0"  # 0x03 fw_version
+)
+
+# --- V0 response test payload (UNVR-like) ---
+# Version=0, Command=0, data_len=26
+# Fields: hw_addr(0x01), product_name(0x15), unifi_os_version(0x16)
+V0_RESPONSE = (
+    b"\x00\x00"  # version=0, command=0
+    b"\x00\x1a"  # data_len=26
+    b"\x01\x00\x06\xe4\x38\x83\x32\xc9\xb1"  # 0x01 hw_addr
+    b"\x15\x00\x04UNVR"  # 0x15 product_name
+    b"\x16\x00\x07" b"v4.2.16"  # 0x16 unifi_os_version
+)
+
+# --- V2 response with unknown fields (seq, source_mac, is_default) ---
+V2_RESPONSE_WITH_EXTRA_FIELDS = (
+    b"\x02\x06"  # version=2, command=6
+    b"\x00\x1b"  # data_len=27
+    b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr (9 bytes)
+    b"\x12\x00\x02\x00\x01"  # 0x12 seq=1 (5 bytes)
+    b"\x13\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x13 source_mac (9 bytes)
+    b"\x17\x00\x01\x00"  # 0x17 is_default=False (4 bytes)
+)
+
+
+def test_parse_v1_response():
+    """Test parsing a standard V1 response."""
+    payload = (
+        b"\x01\x00\x00\x8e"
+        b"\x02\x00\n\xe0c\xda\x00^\x08\xc0\xa8\xd4\x01"
+        b"\x01\x00\x06\xe0c\xda\x00^\x08"
+        b"\n\x00\x04\x00\x13\xe60"
+        b"\x0b\x00\x04Gate"
+        b"\x0c\x00\nUVC G4 Pro"
+        b"\x17\x00\x04\x00\x00\x00\x00"
+        b"\x03\x00'UVC.S5L.v4.46.18.67.ceacbaa.211202.1017"
+        b"\x10\x00\x02c\xa5"
+        b" \x00$32f695ba-835b-5822-bc54-e290e1789ff1"
+    )
+    device = parse_ubnt_response(payload, ("192.168.212.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.source_ip == "192.168.212.1"
+    assert device.hw_addr == "e0:63:da:00:5e:08"
+    assert device.hostname == "Gate"
+    assert device.platform == "UVC G4 Pro"
+    assert device.signature_version == "1"
+    assert device.product_name is None
+    assert device.unifi_os_version is None
+
+
+def test_parse_v2_response():
+    """Test parsing a V2 discovery response."""
+    device = parse_ubnt_response(V2_RESPONSE, ("192.168.7.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.source_ip == "192.168.7.1"
+    assert device.hw_addr == "e0:63:da:00:5e:08"
+    assert device.product_name == "UDMPROMAX"
+    assert device.unifi_os_version == "10.3.47"
+    assert device.fw_version == "7.0.0"
+    assert device.signature_version == "2"
+
+
+def test_parse_v0_response():
+    """Test parsing a V0 response (e.g. UNVR)."""
+    device = parse_ubnt_response(V0_RESPONSE, ("192.168.7.8", 35827))
+    assert device is not None
+    assert device.source_ip == "192.168.7.8"
+    assert device.hw_addr == "e4:38:83:32:c9:b1"
+    assert device.product_name == "UNVR"
+    assert device.unifi_os_version == "v4.2.16"
+    assert device.signature_version == "0"
+
+
+def test_parse_v2_response_ignores_unknown_field_ids():
+    """Test that V2 response with unknown field IDs doesn't crash."""
+    # 0x12 (seq) and 0x13 (source_mac) are known protocol fields
+    # but not mapped to UnifiDevice — they should be silently skipped
+    device = parse_ubnt_response(
+        V2_RESPONSE_WITH_EXTRA_FIELDS, ("192.168.7.1", DISCOVERY_PORT)
+    )
+    assert device is not None
+    assert device.hw_addr == "e0:63:da:00:5e:08"
+    assert device.signature_version == "2"
+
+
+def test_parse_response_none_payload():
+    """Test parsing None payload."""
+    assert parse_ubnt_response(None, ("192.168.1.1", DISCOVERY_PORT)) is None
+
+
+def test_parse_response_too_short():
+    """Test parsing too-short payload."""
+    assert parse_ubnt_response(b"\x01\x00", ("192.168.1.1", DISCOVERY_PORT)) is None
+
+
+def test_parse_response_unknown_version():
+    """Test parsing unknown version/command combination."""
+    payload = b"\x05\x00\x00\x00"  # version 5, not valid
+    assert parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT)) is None
+
+
+def test_parse_response_truncated_payload():
+    """Test that a truncated payload (data_len > actual data) doesn't crash."""
+    # Header claims 100 bytes of data but only 9 bytes follow
+    payload = (
+        b"\x01\x00"  # version=1, command=0
+        b"\x00\x64"  # data_len=100 (lie)
+        b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr (only 9 bytes)
+    )
+    device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.hw_addr == "e0:63:da:00:5e:08"
+    assert device.signature_version == "1"
+
+
+def test_parse_v2_echo_rejected():
+    """Test that a V2 request echo (command=8) is not parsed as a response.
+
+    Consoles echo incoming packets from an ephemeral port. Our V2 request
+    (version=2, command=8, data_len=0) must not be mistaken for a V2 response.
+    """
+    from unifi_discovery import UBNT_V2_REQUEST
+
+    assert parse_ubnt_response(UBNT_V2_REQUEST, ("192.168.7.1", 44306)) is None
+
+
+def test_merge_devices():
+    """Test merging V1 and V2 device records is order-independent."""
+    from unifi_discovery import _merge_devices
+
+    v1_device = UnifiDevice(
+        source_ip="192.168.7.1",
+        hw_addr="e0:63:da:00:5e:08",
+        ip_info=["e0:63:da:00:5e:08;192.168.7.1"],
+        hostname="UDM",
+        platform="UDMPROMAX",
+        uptime=12345,
+        fw_version="7.0.0",
+        signature_version="1",
+    )
+    v2_device = UnifiDevice(
+        source_ip="192.168.7.1",
+        hw_addr="e0:63:da:00:5e:08",
+        product_name="UDMPROMAX",
+        unifi_os_version="10.3.47",
+        fw_version="7.0.0",
+        signature_version="2",
+    )
+    merged_v1_first = _merge_devices(v1_device, v2_device)
+    merged_v2_first = _merge_devices(v2_device, v1_device)
+
+    # Both orders should produce equivalent results
+    assert merged_v1_first.hostname == "UDM"
+    assert merged_v1_first.platform == "UDMPROMAX"
+    assert merged_v1_first.uptime == 12345
+    assert merged_v1_first.product_name == "UDMPROMAX"
+    assert merged_v1_first.unifi_os_version == "10.3.47"
+    assert merged_v1_first.hw_addr == "e0:63:da:00:5e:08"
+    assert merged_v1_first.fw_version == "7.0.0"
+
+    assert merged_v2_first.hostname == "UDM"
+    assert merged_v2_first.platform == "UDMPROMAX"
+    assert merged_v2_first.uptime == 12345
+    assert merged_v2_first.product_name == "UDMPROMAX"
+    assert merged_v2_first.unifi_os_version == "10.3.47"
+    assert merged_v2_first.hw_addr == "e0:63:da:00:5e:08"
+    assert merged_v2_first.fw_version == "7.0.0"
+
+
+def test_merge_devices_ip_info_dedup():
+    """Test that merging devices deduplicates ip_info entries."""
+    from unifi_discovery import _merge_devices
+
+    d1 = UnifiDevice(
+        source_ip="10.0.0.1",
+        ip_info=["aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.2"],
+    )
+    d2 = UnifiDevice(
+        source_ip="10.0.0.1",
+        ip_info=["aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.3"],
+    )
+    merged = _merge_devices(d1, d2)
+    assert merged.ip_info == [
+        "aa:bb:cc:dd:ee:ff;10.0.0.1",
+        "aa:bb:cc:dd:ee:ff;10.0.0.2",
+        "aa:bb:cc:dd:ee:ff;10.0.0.3",
+    ]
