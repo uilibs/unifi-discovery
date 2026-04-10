@@ -555,7 +555,7 @@ async def test_async_scanner_console_v1_echo_plus_v2_response(
     """Test console detected via V1 echo still gets service-probed after V2 merge.
 
     Consoles echo the V1 request from an ephemeral port (signature_version=None)
-    AND respond to V2 requests with product_name/unifi_os_version. After merging,
+    AND respond to V2 requests with product_name/version. After merging,
     the console must still be identified and probed for services.
     """
     scanner = AIOUnifiScanner()
@@ -590,7 +590,7 @@ async def test_async_scanner_console_v1_echo_plus_v2_response(
     device = scanner.found_devices[0]
     # V2 fields merged in
     assert device.product_name == "UDMPROMAX"
-    assert device.unifi_os_version == "10.3.47"
+    assert device.version == "10.3.47"
     # Services were probed (the critical assertion — would fail without the fix)
     assert device.services == {
         UnifiService.Protect: True,
@@ -606,25 +606,25 @@ async def test_async_scanner_console_v1_echo_plus_v2_response(
 
 # --- V2 response test payload ---
 # Version=2, Command=9, data_len=39
-# Fields: hw_addr(0x01), product_name(0x15), unifi_os_version(0x16), fw_version(0x03)
+# Fields: hw_addr(0x01), product_name(0x15), version(0x16), fw_version(0x03)
 V2_RESPONSE = (
     b"\x02\x09"  # version=2, command=9
     b"\x00\x27"  # data_len=39
     b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr
     b"\x15\x00\x09UDMPROMAX"  # 0x15 product_name
-    b"\x16\x00\x07" b"10.3.47"  # 0x16 unifi_os_version
+    b"\x16\x00\x07" b"10.3.47"  # 0x16 version
     b"\x03\x00\x05" b"7.0.0"  # 0x03 fw_version
 )
 
 # --- V0 response test payload (UNVR-like) ---
 # Version=0, Command=0, data_len=26
-# Fields: hw_addr(0x01), product_name(0x15), unifi_os_version(0x16)
+# Fields: hw_addr(0x01), product_name(0x15), version(0x16)
 V0_RESPONSE = (
     b"\x00\x00"  # version=0, command=0
     b"\x00\x1a"  # data_len=26
     b"\x01\x00\x06\xe4\x38\x83\x32\xc9\xb1"  # 0x01 hw_addr
     b"\x15\x00\x04UNVR"  # 0x15 product_name
-    b"\x16\x00\x07" b"v4.2.16"  # 0x16 unifi_os_version
+    b"\x16\x00\x07" b"v4.2.16"  # 0x16 version
 )
 
 # --- V2 response with unknown fields (seq, source_mac, is_default) ---
@@ -660,7 +660,7 @@ def test_parse_v1_response():
     assert device.platform == "UVC G4 Pro"
     assert device.signature_version == "1"
     assert device.product_name is None
-    assert device.unifi_os_version is None
+    assert device.version is None
 
 
 def test_parse_v2_response():
@@ -670,7 +670,7 @@ def test_parse_v2_response():
     assert device.source_ip == "192.168.7.1"
     assert device.hw_addr == "e0:63:da:00:5e:08"
     assert device.product_name == "UDMPROMAX"
-    assert device.unifi_os_version == "10.3.47"
+    assert device.version == "10.3.47"
     assert device.fw_version == "7.0.0"
     assert device.signature_version == "2"
 
@@ -682,7 +682,7 @@ def test_parse_v0_response():
     assert device.source_ip == "192.168.7.8"
     assert device.hw_addr == "e4:38:83:32:c9:b1"
     assert device.product_name == "UNVR"
-    assert device.unifi_os_version == "v4.2.16"
+    assert device.version == "v4.2.16"
     assert device.signature_version == "0"
 
 
@@ -757,7 +757,7 @@ def test_merge_devices():
         source_ip="192.168.7.1",
         hw_addr="e0:63:da:00:5e:08",
         product_name="UDMPROMAX",
-        unifi_os_version="10.3.47",
+        version="10.3.47",
         fw_version="7.0.0",
         signature_version="2",
     )
@@ -769,7 +769,7 @@ def test_merge_devices():
     assert merged_v1_first.platform == "UDMPROMAX"
     assert merged_v1_first.uptime == 12345
     assert merged_v1_first.product_name == "UDMPROMAX"
-    assert merged_v1_first.unifi_os_version == "10.3.47"
+    assert merged_v1_first.version == "10.3.47"
     assert merged_v1_first.hw_addr == "e0:63:da:00:5e:08"
     assert merged_v1_first.fw_version == "7.0.0"
 
@@ -777,7 +777,7 @@ def test_merge_devices():
     assert merged_v2_first.platform == "UDMPROMAX"
     assert merged_v2_first.uptime == 12345
     assert merged_v2_first.product_name == "UDMPROMAX"
-    assert merged_v2_first.unifi_os_version == "10.3.47"
+    assert merged_v2_first.version == "10.3.47"
     assert merged_v2_first.hw_addr == "e0:63:da:00:5e:08"
     assert merged_v2_first.fw_version == "7.0.0"
 
@@ -812,7 +812,7 @@ def test_deduplicate_by_mac():
             source_ip="192.168.7.1",
             hw_addr="58:d6:1f:3b:c1:f4",
             product_name="UDMPROMAX",
-            unifi_os_version="10.3.47",
+            version="10.3.47",
             fw_version="7.0.0",
             signature_version="2",
             ip_info=["58:d6:1f:3b:c1:f4;192.168.7.1"],
@@ -859,7 +859,7 @@ def test_deduplicate_by_mac():
     assert "192.168.7.1" in response_list
     primary = response_list["192.168.7.1"]
     assert primary.product_name == "UDMPROMAX"
-    assert primary.unifi_os_version == "10.3.47"
+    assert primary.version == "10.3.47"
     assert primary.hostname == "UDMP-Max"  # merged from VLAN echo
     # Services: Access was True in VLAN echo, should be merged
     assert primary.services[UnifiService.Access] is True

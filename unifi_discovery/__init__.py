@@ -138,7 +138,7 @@ FIELD_PARSERS_V2 = {
     ),
     0x03: ("fw_version", bytes.decode, False),
     0x15: ("product_name", bytes.decode, False),
-    0x16: ("unifi_os_version", bytes.decode, False),
+    0x16: ("version", bytes.decode, False),
 }
 
 
@@ -168,7 +168,7 @@ class UnifiDevice:
     is_sso_enabled: bool | None = None
     is_single_user: bool | None = None
     product_name: str | None = None
-    unifi_os_version: str | None = None
+    version: str | None = None
 
 
 def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
@@ -526,7 +526,7 @@ def async_clear_cache() -> None:
 def _is_console(device: UnifiDevice) -> bool:
     """Return True if the device is a UniFi OS console."""
     return (
-        device.unifi_os_version is not None
+        device.version is not None
         or any(device.services.values())
     )
 
@@ -658,7 +658,7 @@ class AIOUnifiScanner:
             device.source_ip
             for device in response_list.values()
             if device.signature_version is None
-            or device.unifi_os_version is not None
+            or device.version is not None
         ]
         if not console_ips:
             return
