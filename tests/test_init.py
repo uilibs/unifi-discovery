@@ -763,3 +763,92 @@ def test_merge_devices_ip_info_dedup():
         "aa:bb:cc:dd:ee:ff;10.0.0.2",
         "aa:bb:cc:dd:ee:ff;10.0.0.3",
     ]
+
+
+def test_deduplicate_by_mac():
+    """Test that devices with the same MAC from different VLANs are deduplicated."""
+    from unifi_discovery import _deduplicate_by_mac
+
+    response_list = {
+        # Primary: rich V2 response
+        "192.168.7.1": UnifiDevice(
+            source_ip="192.168.7.1",
+            hw_addr="58:d6:1f:3b:c1:f4",
+            product_name="UDMPROMAX",
+            unifi_os_version="10.3.47",
+            fw_version="7.0.0",
+            signature_version="2",
+            ip_info=["58:d6:1f:3b:c1:f4;192.168.7.1"],
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: True,
+                UnifiService.Access: False,
+            },
+        ),
+        # VLAN echo with hostname from system API
+        "192.168.23.1": UnifiDevice(
+            source_ip="192.168.23.1",
+            hw_addr="58:d6:1f:3b:c1:f4",
+            hostname="UDMP-Max",
+            platform="UDMPROMAX",
+            signature_version=None,
+            services={
+                UnifiService.Protect: True,
+                UnifiService.Network: True,
+                UnifiService.Access: True,
+            },
+        ),
+        # Another VLAN echo (bare)
+        "192.168.90.1": UnifiDevice(
+            source_ip="192.168.90.1",
+            hw_addr="58:d6:1f:3b:c1:f4",
+            signature_version=None,
+        ),
+        # Different device — must not be affected
+        "192.168.7.99": UnifiDevice(
+            source_ip="192.168.7.99",
+            hw_addr="68:d7:9a:e2:45:57",
+            hostname="Camera",
+            signature_version="1",
+        ),
+    }
+
+    _deduplicate_by_mac(response_list)
+
+    # VLAN duplicates removed
+    assert "192.168.23.1" not in response_list
+    assert "192.168.90.1" not in response_list
+    # Primary kept with merged fields
+    assert "192.168.7.1" in response_list
+    primary = response_list["192.168.7.1"]
+    assert primary.product_name == "UDMPROMAX"
+    assert primary.unifi_os_version == "10.3.47"
+    assert primary.hostname == "UDMP-Max"  # merged from VLAN echo
+    # Services: Access was True in VLAN echo, should be merged
+    assert primary.services[UnifiService.Access] is True
+    # Unrelated device untouched
+    assert "192.168.7.99" in response_list
+    assert response_list["192.168.7.99"].hostname == "Camera"
+
+
+def test_deduplicate_by_mac_no_hwaddr():
+    """Test that devices without hw_addr are not deduplicated."""
+    from unifi_discovery import _deduplicate_by_mac
+
+    response_list = {
+        "192.168.17.1": UnifiDevice(
+            source_ip="192.168.17.1",
+            hw_addr=None,
+            signature_version=None,
+        ),
+        "192.168.7.1": UnifiDevice(
+            source_ip="192.168.7.1",
+            hw_addr=None,
+            signature_version=None,
+        ),
+    }
+
+    _deduplicate_by_mac(response_list)
+
+    # Both kept — can't deduplicate without MAC
+    assert len(response_list) == 2

@@ -200,6 +200,63 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
     return replace(existing, **updates)
 
 
+def _deduplicate_by_mac(
+    response_list: dict[str, UnifiDevice],
+) -> dict[str, UnifiDevice]:
+    """Deduplicate devices that share the same hw_addr.
+
+    Consoles respond from every VLAN interface, creating multiple entries
+    with the same MAC but different source IPs. We keep the entry with the
+    richest data (most non-None fields) and merge the others into it.
+    Devices without hw_addr are always kept as-is.
+    """
+    # Group IPs by hw_addr
+    mac_to_ips: dict[str, list[str]] = {}
+    for ip, device in response_list.items():
+        if device.hw_addr is not None:
+            mac_to_ips.setdefault(device.hw_addr, []).append(ip)
+
+    # Nothing to deduplicate
+    if all(len(ips) <= 1 for ips in mac_to_ips.values()):
+        return response_list
+
+    to_remove: set[str] = set()
+    for mac, ips in mac_to_ips.items():
+        if len(ips) <= 1:
+            continue
+
+        # Pick the entry with the most populated fields as the primary
+        def _richness(ip: str) -> int:
+            d = response_list[ip]
+            return sum(
+                1
+                for f in d.__dataclass_fields__
+                if f not in ("source_ip", "services")
+                and getattr(d, f) is not None
+            )
+
+        ips.sort(key=_richness, reverse=True)
+        primary_ip = ips[0]
+        primary = response_list[primary_ip]
+
+        # Merge services from duplicates (take True over False)
+        merged_services = dict(primary.services)
+        for dup_ip in ips[1:]:
+            dup = response_list[dup_ip]
+            primary = _merge_devices(primary, dup)
+            for svc, available in dup.services.items():
+                if available:
+                    merged_services[svc] = True
+            to_remove.add(dup_ip)
+
+        response_list[primary_ip] = replace(primary, services=merged_services)
+
+    for ip in to_remove:
+        del response_list[ip]
+
+    return response_list
+
+
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
     """
     Check if a console is alive.
@@ -741,6 +798,7 @@ class AIOUnifiScanner:
 
         await self._probe_services_and_system(response_list)
         await self._add_missing_hw_addresses(response_list)
+        _deduplicate_by_mac(response_list)
 
         self.found_devices = list(response_list.values())
         return self.found_devices
