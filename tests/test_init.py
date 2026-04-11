@@ -19,9 +19,11 @@ from unifi_discovery import (
     UnifiDiscovery,
     UnifiService,
     _deduplicate_by_mac,
+    _filter_devices,
     _merge_devices,
     async_clear_cache,
     async_console_is_alive,
+    clear_cache,
     create_udp_socket,
     parse_ubnt_response,
 )
@@ -32,9 +34,9 @@ CONSOLE_EPHEMERAL_PORT = 44306
 @pytest.fixture(autouse=True)
 def _clear_scan_cache():
     """Clear the module-level scan cache between tests."""
-    async_clear_cache()
+    clear_cache()
     yield
-    async_clear_cache()
+    clear_cache()
 
 
 @pytest.fixture
@@ -994,3 +996,24 @@ async def test_probe_releases_all_responses_when_processing_raises():
     assert "1.1.1.1/proxy/protect/api" in released
     assert "1.1.1.1/proxy/network/api" in released
     assert "1.1.1.1/api/system" in released
+
+
+def test_is_console_keeps_v1_echo_when_probes_fail():
+    """
+    A V1-echo console must survive consoles_only filtering even when
+    every service probe failed (all False) and no V2 version landed.
+    """
+    console = UnifiDevice(source_ip="192.168.1.1", signature_version=None)
+    camera = UnifiDevice(source_ip="192.168.1.2", signature_version="1")
+
+    kept = _filter_devices([console, camera], consoles_only=True)
+    assert console in kept
+    assert camera not in kept
+
+
+def test_async_clear_cache_deprecated_alias_still_clears():
+    """async_clear_cache is deprecated but must still clear the cache."""
+    unifi_discovery._scan_state.cache = (0.0, [])
+    with pytest.warns(DeprecationWarning, match="async_clear_cache is deprecated"):
+        async_clear_cache()
+    assert unifi_discovery._scan_state.cache is None

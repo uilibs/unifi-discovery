@@ -5,6 +5,7 @@ import logging
 import re
 import socket
 import time
+import warnings
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -301,7 +302,7 @@ def parse_ubnt_response(
     payload: bytes | None, from_address: tuple[str, int]
 ) -> UnifiDevice | None:
     # We received a broadcast packet in reply to our discovery
-    fields: dict[str, str | list[str]] = {"source_ip": from_address[0]}
+    fields: dict[str, object] = {"source_ip": from_address[0]}
 
     if payload is None or len(payload) < 4:
         return None
@@ -530,14 +531,39 @@ class _ScanCacheState:
 _scan_state = _ScanCacheState()
 
 
-def async_clear_cache() -> None:
+def clear_cache() -> None:
     """Clear the scan result cache."""
     _scan_state.clear()
 
 
+def async_clear_cache() -> None:
+    """Deprecated alias for :func:`clear_cache` — the function is synchronous."""
+    warnings.warn(
+        "async_clear_cache is deprecated; use clear_cache instead "
+        "(the function is synchronous).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    clear_cache()
+
+
 def _is_console(device: UnifiDevice) -> bool:
-    """Return True if the device is a UniFi OS console."""
-    return device.version is not None or any(device.services.values())
+    """
+    Return True if the device is a UniFi OS console.
+
+    We treat a device as a console when any of:
+    - V2/V0 responses populated ``version`` (controller version field)
+    - A probed service returned 401 (marked True)
+    - The device was discovered via the V1 echo path (``signature_version``
+      is None), i.e. the console echoed our broadcast from an ephemeral
+      port. Without this last check, a console whose probes all fail or
+      time out would be silently dropped when ``consoles_only=True``.
+    """
+    return (
+        device.version is not None
+        or device.signature_version is None
+        or any(device.services.values())
+    )
 
 
 def _filter_devices(
