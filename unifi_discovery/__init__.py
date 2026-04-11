@@ -531,11 +531,6 @@ class _ScanCacheState:
 _scan_state = _ScanCacheState()
 
 
-def _copy_devices(devices: list[UnifiDevice]) -> list[UnifiDevice]:
-    """Return a shallow copy of the device list. Devices are frozen and safe to share."""
-    return list(devices)
-
-
 def async_clear_cache() -> None:
     """Clear the scan result cache."""
     _scan_state.clear()
@@ -775,23 +770,19 @@ class AIOUnifiScanner:
         lock = _scan_state.get_lock()
         cached = _scan_state.cache
         if cached is not None and time.monotonic() - cached[0] < SCAN_CACHE_TTL:
-            self.found_devices = _filter_devices(
-                _copy_devices(cached[1]), consoles_only
-            )
+            self.found_devices = _filter_devices(list(cached[1]), consoles_only)
             return self.found_devices
 
         async with lock:
             # Re-check after acquiring lock (another caller may have filled cache)
             cached = _scan_state.cache
             if cached is not None and time.monotonic() - cached[0] < SCAN_CACHE_TTL:
-                self.found_devices = _filter_devices(
-                    _copy_devices(cached[1]), consoles_only
-                )
+                self.found_devices = _filter_devices(list(cached[1]), consoles_only)
                 return self.found_devices
 
             result = await self._async_do_scan(timeout, address)
             _scan_state.cache = (time.monotonic(), result)
-            self.found_devices = _filter_devices(_copy_devices(result), consoles_only)
+            self.found_devices = _filter_devices(list(result), consoles_only)
             return self.found_devices
 
     async def _async_do_scan(
