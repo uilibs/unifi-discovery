@@ -167,9 +167,6 @@ FIELD_PARSERS = {
     _FIELD_PRODUCT_NAME: ("product_name", bytes.decode, False),
     _FIELD_VERSION: ("version", bytes.decode, False),
 }
-# Backwards-compatibility aliases — external callers imported these names.
-FIELD_PARSERS_V1 = FIELD_PARSERS
-FIELD_PARSERS_V2 = FIELD_PARSERS
 
 # (version, command) → signature label. All dispatches use FIELD_PARSERS.
 # v=0 is handled as a fallback at the call site because it accepts any
