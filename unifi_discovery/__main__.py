@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from dataclasses import asdict
+from dataclasses import fields
 
 from . import AIOUnifiScanner
 
@@ -53,10 +53,13 @@ async def _run(args: argparse.Namespace) -> int:
         return 1
     for device in devices:
         print(f"--- {device.source_ip} ---")
-        for key, value in asdict(device).items():
-            if value in (None, {}, [], ()):
+        for f in fields(device):
+            value = getattr(device, f.name)
+            if not value and value != 0:
                 continue
-            print(f"  {key}: {value}")
+            if f.name == "services":
+                value = {svc.name: ok for svc, ok in value.items()}
+            print(f"  {f.name}: {value}")
     return 0
 
 
