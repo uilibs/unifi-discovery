@@ -12,8 +12,8 @@ from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
+from struct import Struct
 from struct import error as StructError
-from struct import pack, unpack
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, cast
 
@@ -68,10 +68,12 @@ _CMD_V2_REQUEST = 8  # V2 request
 _CMD_V2_RESPONSE_A = 6  # V2 response variant A
 _CMD_V2_RESPONSE_B = 9  # V2 response variant B
 
-# Discovery packet header format: version, command, data length (big-endian short).
-_UBNT_HEADER = ">BBH"
-UBNT_V1_REQUEST = pack(_UBNT_HEADER, _PROTO_V1, _CMD_V1_DISCOVERY, 0)
-UBNT_V2_REQUEST = pack(_UBNT_HEADER, _PROTO_V2, _CMD_V2_REQUEST, 0)
+# Discovery packet header: version (u8), command (u8), data length (u16 BE).
+_UBNT_HEADER_STRUCT = Struct(">BBH")
+# Each TLV field starts with type (u8) and length (u16 BE).
+_UBNT_FIELD_STRUCT = Struct(">BH")
+UBNT_V1_REQUEST = _UBNT_HEADER_STRUCT.pack(_PROTO_V1, _CMD_V1_DISCOVERY, 0)
+UBNT_V2_REQUEST = _UBNT_HEADER_STRUCT.pack(_PROTO_V2, _CMD_V2_REQUEST, 0)
 DISCOVERY_PORT = 10001
 BROADCAST_FREQUENCY = 3
 ARP_CACHE_POPULATE_TIME = 10
@@ -312,9 +314,10 @@ def async_get_source_ip(target_ip: str) -> str | None:
 def iter_fields(data, _len):
     pointer = 0
     data_end = min(_len, len(data))
-    while pointer + 3 <= data_end:
-        fieldType, fieldLen = unpack(">BH", data[pointer : pointer + 3])
-        pointer += 3
+    field_size = _UBNT_FIELD_STRUCT.size
+    while pointer + field_size <= data_end:
+        fieldType, fieldLen = _UBNT_FIELD_STRUCT.unpack_from(data, pointer)
+        pointer += field_size
         if pointer + fieldLen > data_end:
             break
         fieldData = data[pointer : pointer + fieldLen]
@@ -336,9 +339,7 @@ def parse_ubnt_response(
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
         return UnifiDevice(**fields)  # type: ignore
 
-    version = payload[0]
-    command = payload[1]
-    data_len = unpack(">H", payload[2:4])[0]
+    version, command, data_len = _UBNT_HEADER_STRUCT.unpack_from(payload)
 
     # (version, command) → (signature label, field parsers).
     # v=0 is a fallback below: any command, requires data_len > 0 (e.g. UNVR).
