@@ -188,6 +188,9 @@ class UnifiDevice:
 
 
 _MERGE_SKIP = frozenset({"source_ip", "services"})
+_COUNTED_FIELDS: tuple[str, ...] = tuple(
+    f for f in UnifiDevice.__dataclass_fields__ if f not in _MERGE_SKIP
+)
 
 
 def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
@@ -221,11 +224,7 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
 
 def _populated_field_count(device: UnifiDevice) -> int:
     """Count non-None fields on a device, excluding identity/services."""
-    return sum(
-        1
-        for f in device.__dataclass_fields__
-        if f not in _MERGE_SKIP and getattr(device, f) is not None
-    )
+    return sum(getattr(device, f) is not None for f in _COUNTED_FIELDS)
 
 
 def _deduplicate_by_mac(response_list: dict[str, UnifiDevice]) -> None:
