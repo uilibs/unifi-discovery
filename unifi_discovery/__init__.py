@@ -144,6 +144,15 @@ FIELD_PARSERS_V2 = {
     0x16: ("version", bytes.decode, False),
 }
 
+# (version, command) → (signature label, field parser table).
+# v=0 is handled as a fallback at the call site because it accepts any
+# command but requires data_len > 0 (observed on e.g. UNVR).
+_PARSER_DISPATCH: dict[tuple[int, int], tuple[str, dict]] = {
+    (1, 0): ("1", FIELD_PARSERS_V1),
+    (2, 6): ("2", FIELD_PARSERS_V2),
+    (2, 9): ("2", FIELD_PARSERS_V2),
+}
+
 
 _EMPTY_SERVICES: Mapping[UnifiService, bool] = MappingProxyType(
     dict.fromkeys(UnifiService, False)
@@ -307,18 +316,14 @@ def parse_ubnt_response(
     command = payload[1]
     data_len = unpack(">H", payload[2:4])[0]
 
-    if version == 1 and command == 0:
-        fields["signature_version"] = "1"
-        field_parsers = FIELD_PARSERS_V1
-    elif version == 2 and command in (6, 9):
-        fields["signature_version"] = "2"
-        field_parsers = FIELD_PARSERS_V2
-    elif version == 0 and data_len > 0:
-        # Some devices (e.g. UNVR) respond with version 0
-        fields["signature_version"] = "0"
-        field_parsers = FIELD_PARSERS_V2
-    else:
+    # (version, command) → (signature label, field parsers).
+    # v=0 is a fallback below: any command, requires data_len > 0 (e.g. UNVR).
+    dispatch = _PARSER_DISPATCH.get((version, command))
+    if dispatch is None and version == 0 and data_len > 0:
+        dispatch = ("0", FIELD_PARSERS_V2)
+    if dispatch is None:
         return None
+    fields["signature_version"], field_parsers = dispatch
 
     # Walk the reply payload, starting from offset 04
     # (just after reply signature and payload size).
