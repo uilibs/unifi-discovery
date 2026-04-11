@@ -154,6 +154,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             platform="UDMPROSE",
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: True,
@@ -230,6 +231,7 @@ async def test_async_scanner_no_system_response(
             platform=None,
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: False,
@@ -299,6 +301,7 @@ async def test_async_scanner_system_api_missing_mac(
             platform="UCKP",
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: False,
@@ -344,6 +347,7 @@ async def test_async_scanner_system_api_returns_html(
             platform=None,
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: False,
@@ -396,6 +400,7 @@ async def test_async_scanner_access_service_detected(
             platform="UNVR",
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: True,
@@ -451,6 +456,7 @@ async def test_async_scanner_access_service_not_available(
             platform="UCKP",
             model=None,
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: False,
                 UnifiService.Network: False,
@@ -870,6 +876,7 @@ def test_deduplicate_by_mac():
             hostname="UDMP-Max",
             platform="UDMPROMAX",
             signature_version=None,
+            echoed=True,
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: True,
@@ -881,6 +888,7 @@ def test_deduplicate_by_mac():
             source_ip="192.168.90.1",
             hw_addr="58:d6:1f:3b:c1:f4",
             signature_version=None,
+            echoed=True,
         ),
         # Different device — must not be affected
         "192.168.7.99": UnifiDevice(
@@ -916,11 +924,13 @@ def test_deduplicate_by_mac_no_hwaddr():
             source_ip="192.168.17.1",
             hw_addr=None,
             signature_version=None,
+            echoed=True,
         ),
         "192.168.7.1": UnifiDevice(
             source_ip="192.168.7.1",
             hw_addr=None,
             signature_version=None,
+            echoed=True,
         ),
     }
 
@@ -978,8 +988,8 @@ async def test_probe_releases_all_responses_when_processing_raises():
 
     scanner = AIOUnifiScanner()
     response_list = {
-        "1.1.1.1": UnifiDevice(source_ip="1.1.1.1", signature_version=None),
-        "2.2.2.2": UnifiDevice(source_ip="2.2.2.2", signature_version=None),
+        "1.1.1.1": UnifiDevice(source_ip="1.1.1.1", echoed=True),
+        "2.2.2.2": UnifiDevice(source_ip="2.2.2.2", echoed=True),
     }
 
     with pytest.raises(asyncio.CancelledError):
@@ -1003,12 +1013,82 @@ def test_is_console_keeps_v1_echo_when_probes_fail():
     A V1-echo console must survive consoles_only filtering even when
     every service probe failed (all False) and no V2 version landed.
     """
-    console = UnifiDevice(source_ip="192.168.1.1", signature_version=None)
+    console = UnifiDevice(source_ip="192.168.1.1", echoed=True)
     camera = UnifiDevice(source_ip="192.168.1.2", signature_version="1")
 
     kept = _filter_devices([console, camera], consoles_only=True)
     assert console in kept
     assert camera not in kept
+
+
+def test_v2_response_without_version_field_is_still_a_console() -> None:
+    """
+    UNVR-style regression: V2 command=9 response that reuses V1 field IDs and
+    omits product_name/version (0x15/0x16) must still be recognized as a
+    console via signature_version="2".
+    """
+    # Synthetic: V2 command=9, only 0x01 hw_addr + 0x0b hostname + 0x0c platform
+    payload = (
+        b"\x02\x09"  # version=2, command=9
+        b"\x00\x1b"  # data_len=27
+        b"\x01\x00\x06\x02\x00\x00\x00\x00\x01"  # 0x01 hw_addr
+        b"\x0b\x00\x04host"  # 0x0b hostname — V1 field, must still be parsed
+        b"\x0c\x00\x04plat"  # 0x0c platform — V1 field, must still be parsed
+    )
+    device = parse_ubnt_response(payload, ("10.0.0.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.signature_version == "2"
+    assert device.hw_addr == "02:00:00:00:00:01"
+    # V1 field IDs MUST be decoded on V2 — not just product_name/version.
+    assert device.hostname == "host"
+    assert device.platform == "plat"
+    # version field absent in this response but _is_console still True because
+    # any V2 responder is a UniFi OS device.
+    assert device.version is None
+    assert _filter_devices([device], consoles_only=True) == [device]
+
+
+def test_v1_then_v2_merge_keeps_v2_version_field() -> None:
+    """
+    V1-then-V2 merge regression: V1 response arrives first (sig_version="1"),
+    then V2 with product_name/version. The merged device must carry version
+    so consoles_only=True keeps it even when the echo packet arrives too late.
+    """
+    v1 = UnifiDevice(
+        source_ip="10.0.0.1",
+        hw_addr="02:00:00:00:00:01",
+        hostname="console",
+        platform="PLATFORM",
+        fw_version="1.2.3",
+        signature_version="1",
+    )
+    v2 = UnifiDevice(
+        source_ip="10.0.0.1",
+        hw_addr="02:00:00:00:00:01",
+        product_name="PLATFORM",
+        version="7.0.0",
+        signature_version="2",
+    )
+    merged = _merge_devices(v1, v2)
+    assert merged.version == "7.0.0"
+    assert merged.product_name == "PLATFORM"
+    assert _filter_devices([merged], consoles_only=True) == [merged]
+
+
+def test_echo_then_v1_merge_preserves_echoed_bit() -> None:
+    """Echo bit must survive a later V1 response for the same IP."""
+    echo = UnifiDevice(source_ip="10.0.0.2", echoed=True)
+    v1 = UnifiDevice(
+        source_ip="10.0.0.2",
+        hw_addr="02:00:00:00:00:02",
+        hostname="host",
+        signature_version="1",
+    )
+    merged = _merge_devices(echo, v1)
+    assert merged.echoed is True
+    assert merged.hw_addr == "02:00:00:00:00:02"
+    assert merged.signature_version == "1"
+    assert _filter_devices([merged], consoles_only=True) == [merged]
 
 
 def test_async_clear_cache_deprecated_alias_still_clears():

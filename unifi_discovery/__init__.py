@@ -151,7 +151,11 @@ def _parse_uptime(data: bytes) -> int:
 
 
 # field id -> (attribute name, parser (bytes -> value), may-repeat)
-FIELD_PARSERS_V1 = {
+# V1 and V2 responses share a single table. V2 adds product_name (0x15) and
+# version (0x16) but reuses V1's field IDs for everything else — for example
+# the UNVR's V2 response (command=9) still carries hostname (0x0b) and platform
+# (0x0c), so separating the parsers would drop those fields on V2/V0 paths.
+FIELD_PARSERS = {
     _FIELD_HW_ADDR: ("hw_addr", mac_repr, False),
     _FIELD_IP_INFO: ("ip_info", _parse_ip_info, True),
     _FIELD_FW_VERSION: ("fw_version", bytes.decode, False),
@@ -161,23 +165,20 @@ FIELD_PARSERS_V1 = {
     _FIELD_HOSTNAME: ("hostname", bytes.decode, False),
     _FIELD_PLATFORM: ("platform", bytes.decode, False),
     _FIELD_MODEL: ("model", bytes.decode, False),
-}
-
-FIELD_PARSERS_V2 = {
-    _FIELD_HW_ADDR: ("hw_addr", mac_repr, False),
-    _FIELD_IP_INFO: ("ip_info", _parse_ip_info, True),
-    _FIELD_FW_VERSION: ("fw_version", bytes.decode, False),
     _FIELD_PRODUCT_NAME: ("product_name", bytes.decode, False),
     _FIELD_VERSION: ("version", bytes.decode, False),
 }
+# Backwards-compatibility aliases — external callers imported these names.
+FIELD_PARSERS_V1 = FIELD_PARSERS
+FIELD_PARSERS_V2 = FIELD_PARSERS
 
-# (version, command) → (signature label, field parser table).
+# (version, command) → signature label. All dispatches use FIELD_PARSERS.
 # v=0 is handled as a fallback at the call site because it accepts any
 # command but requires data_len > 0 (observed on e.g. UNVR).
-_PARSER_DISPATCH: dict[tuple[int, int], tuple[str, dict]] = {
-    (_PROTO_V1, _CMD_V1_DISCOVERY): ("1", FIELD_PARSERS_V1),
-    (_PROTO_V2, _CMD_V2_RESPONSE_A): ("2", FIELD_PARSERS_V2),
-    (_PROTO_V2, _CMD_V2_RESPONSE_B): ("2", FIELD_PARSERS_V2),
+_PARSER_DISPATCH: dict[tuple[int, int], str] = {
+    (_PROTO_V1, _CMD_V1_DISCOVERY): "1",
+    (_PROTO_V2, _CMD_V2_RESPONSE_A): "2",
+    (_PROTO_V2, _CMD_V2_RESPONSE_B): "2",
 }
 
 
@@ -212,9 +213,14 @@ class UnifiDevice:
     is_single_user: bool | None = None
     product_name: str | None = None
     version: str | None = None
+    # True when the device echoed our V1 discovery request from an ephemeral
+    # port. Consoles (UDM/UNVR/UCK/...) echo broadcasts while cameras do not,
+    # so this is a durable "is a UniFi OS device" signal even when the actual
+    # V1/V2 response happens to omit product_name/version.
+    echoed: bool = False
 
 
-_MERGE_SKIP = frozenset({"source_ip", "services"})
+_MERGE_SKIP = frozenset({"source_ip", "services", "echoed"})
 _COUNTED_FIELDS: tuple[str, ...] = tuple(
     f for f in UnifiDevice.__dataclass_fields__ if f not in _MERGE_SKIP
 )
@@ -245,6 +251,10 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
             merged_services[svc] = True
     if merged_services != existing.services:
         updates["services"] = MappingProxyType(merged_services)
+
+    # echoed is an OR-merged durable "console seen" bit.
+    if new.echoed and not existing.echoed:
+        updates["echoed"] = True
 
     return replace(existing, **updates) if updates else existing
 
@@ -337,18 +347,21 @@ def parse_ubnt_response(
         payload[0:4] == UBNT_V1_REQUEST and from_address[1] != DISCOVERY_PORT
     ):  # Check for a UBNT discovery request
         # (first 4 bytes of the payload should be \x01\x00\x00\x00)
+        # This is a console echoing our broadcast from an ephemeral port.
+        fields["echoed"] = True
         return UnifiDevice(**fields)  # type: ignore
 
     version, command, data_len = _UBNT_HEADER_STRUCT.unpack_from(payload)
 
-    # (version, command) → (signature label, field parsers).
+    # (version, command) → signature label.
     # v=0 is a fallback below: any command, requires data_len > 0 (e.g. UNVR).
-    dispatch = _PARSER_DISPATCH.get((version, command))
-    if dispatch is None and version == _PROTO_V0 and data_len > 0:
-        dispatch = ("0", FIELD_PARSERS_V2)
-    if dispatch is None:
+    signature = _PARSER_DISPATCH.get((version, command))
+    if signature is None and version == _PROTO_V0 and data_len > 0:
+        signature = "0"
+    if signature is None:
         return None
-    fields["signature_version"], field_parsers = dispatch
+    fields["signature_version"] = signature
+    field_parsers = FIELD_PARSERS
 
     # Walk the reply payload, starting from offset 04
     # (just after reply signature and payload size).
@@ -572,21 +585,30 @@ def async_clear_cache() -> None:
     clear_cache()
 
 
+_CONSOLE_SIGNATURE_VERSIONS = frozenset({"0", "2"})
+
+
 def _is_console(device: UnifiDevice) -> bool:
     """
     Return True if the device is a UniFi OS console.
 
     We treat a device as a console when any of:
-    - V2/V0 responses populated ``version`` (controller version field)
-    - A probed service returned 401 (marked True)
-    - The device was discovered via the V1 echo path (``signature_version``
-      is None), i.e. the console echoed our broadcast from an ephemeral
-      port. Without this last check, a console whose probes all fail or
-      time out would be silently dropped when ``consoles_only=True``.
+    - It echoed our V1 discovery request (``device.echoed``); cameras do
+      not echo broadcasts, so this is a durable "console seen" bit.
+    - It responded using protocol version 0 or 2 (``signature_version``
+      in {"0", "2"}). V2/V0 responders are always UniFi OS devices — even
+      when their response happens to omit the ``version`` field (observed
+      on UNVR, whose V2 command=9 reply reuses V1 field IDs).
+    - Its V2 response carried the controller ``version`` field (0x16) —
+      consoles populate it, cameras do not. This is our fallback for a
+      console that responded V1 first (sig_version stuck at "1") and V2
+      second; the merged record still carries ``version``.
+    - A probed service returned 401 (marked True).
     """
     return (
-        device.version is not None
-        or device.signature_version is None
+        device.echoed
+        or device.signature_version in _CONSOLE_SIGNATURE_VERSIONS
+        or device.version is not None
         or any(device.services.values())
     )
 
@@ -767,9 +789,7 @@ class AIOUnifiScanner:
     ) -> None:
         """Check which services are available and update the services dict with a provided session."""
         console_ips: list[str] = [
-            device.source_ip
-            for device in response_list.values()
-            if device.signature_version is None or device.version is not None
+            device.source_ip for device in response_list.values() if _is_console(device)
         ]
         if not console_ips:
             return
