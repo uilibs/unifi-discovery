@@ -237,20 +237,20 @@ def _deduplicate_by_mac(response_list: dict[str, UnifiDevice]) -> None:
     populated fields wins; the rest are merged into it and removed.
     Devices without hw_addr are left alone.
     """
-    mac_to_ips: dict[str, list[str]] = {}
-    for ip, device in response_list.items():
+    mac_to_devices: dict[str, list[UnifiDevice]] = {}
+    for device in response_list.values():
         if device.hw_addr is not None:
-            mac_to_ips.setdefault(device.hw_addr, []).append(ip)
+            mac_to_devices.setdefault(device.hw_addr, []).append(device)
 
-    for ips in mac_to_ips.values():
-        if len(ips) <= 1:
+    for devices in mac_to_devices.values():
+        if len(devices) <= 1:
             continue
-        ips.sort(key=lambda ip: _richness(response_list[ip]), reverse=True)
-        primary_ip, *dup_ips = ips
-        primary = response_list[primary_ip]
-        for dup_ip in dup_ips:
-            primary = _merge_devices(primary, response_list.pop(dup_ip))
-        response_list[primary_ip] = primary
+        devices.sort(key=_richness, reverse=True)
+        primary, *dups = devices
+        for dup in dups:
+            primary = _merge_devices(primary, dup)
+            del response_list[dup.source_ip]
+        response_list[primary.source_ip] = primary
 
 
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
