@@ -10,10 +10,13 @@ from aioresponses import aioresponses
 from unifi_discovery import (
     DISCOVERY_PORT,
     UBNT_V1_REQUEST,
+    UBNT_V2_REQUEST,
     AIOUnifiScanner,
     UnifiDevice,
     UnifiDiscovery,
     UnifiService,
+    _deduplicate_by_mac,
+    _merge_devices,
     async_clear_cache,
     async_console_is_alive,
     create_udp_socket,
@@ -739,15 +742,11 @@ def test_parse_v2_echo_rejected():
     Consoles echo incoming packets from an ephemeral port. Our V2 request
     (version=2, command=8, data_len=0) must not be mistaken for a V2 response.
     """
-    from unifi_discovery import UBNT_V2_REQUEST
-
     assert parse_ubnt_response(UBNT_V2_REQUEST, ("192.168.7.1", 44306)) is None
 
 
 def test_merge_devices():
     """Test merging V1 and V2 device records is order-independent."""
-    from unifi_discovery import _merge_devices
-
     v1_device = UnifiDevice(
         source_ip="192.168.7.1",
         hw_addr="e0:63:da:00:5e:08",
@@ -789,8 +788,6 @@ def test_merge_devices():
 
 def test_merge_devices_ip_info_dedup():
     """Test that merging devices deduplicates ip_info entries."""
-    from unifi_discovery import _merge_devices
-
     d1 = UnifiDevice(
         source_ip="10.0.0.1",
         ip_info=["aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.2"],
@@ -809,8 +806,6 @@ def test_merge_devices_ip_info_dedup():
 
 def test_deduplicate_by_mac():
     """Test that devices with the same MAC from different VLANs are deduplicated."""
-    from unifi_discovery import _deduplicate_by_mac
-
     response_list = {
         # Primary: rich V2 response
         "192.168.7.1": UnifiDevice(
@@ -875,8 +870,6 @@ def test_deduplicate_by_mac():
 
 def test_deduplicate_by_mac_no_hwaddr():
     """Test that devices without hw_addr are not deduplicated."""
-    from unifi_discovery import _deduplicate_by_mac
-
     response_list = {
         "192.168.17.1": UnifiDevice(
             source_ip="192.168.17.1",

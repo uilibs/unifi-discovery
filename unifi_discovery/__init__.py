@@ -12,6 +12,7 @@ from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import unpack
+from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, cast
 
 from aiohttp import (
@@ -170,90 +171,70 @@ class UnifiDevice:
     version: str | None = None
 
 
+_MERGE_SKIP = frozenset({"source_ip", "services"})
+
+
 def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
     """
-    Merge two device records for the same IP, filling None gaps from new.
+    Merge two device records, filling None gaps on *existing* from *new*.
 
-    Order-independent: only updates fields on *existing* that are None
-    with non-None values from *new*. The ip_info lists are combined.
+    ip_info lists are combined preserving order and dropping duplicates.
+    services merge with True-wins so a probe result from either record is
+    retained.
     """
     updates: dict[str, object] = {}
     for f in existing.__dataclass_fields__:
-        if f in ("source_ip", "services"):
+        if f in _MERGE_SKIP:
             continue
         old_val = getattr(existing, f)
         new_val = getattr(new, f)
-        if f == "ip_info":
-            if old_val and new_val:
-                seen = set(old_val)
-                combined = list(old_val)
-                for v in new_val:
-                    if v not in seen:
-                        combined.append(v)
-                        seen.add(v)
-                updates[f] = combined
-            elif old_val is None and new_val is not None:
-                updates[f] = new_val
+        if f == "ip_info" and old_val and new_val:
+            updates[f] = list(dict.fromkeys([*old_val, *new_val]))
         elif old_val is None and new_val is not None:
             updates[f] = new_val
-    return replace(existing, **updates)
+
+    merged_services = {**existing.services, **new.services}
+    for svc, available in existing.services.items():
+        if available:
+            merged_services[svc] = True
+    if merged_services != existing.services:
+        updates["services"] = MappingProxyType(merged_services)
+
+    return replace(existing, **updates) if updates else existing
 
 
-def _deduplicate_by_mac(
-    response_list: dict[str, UnifiDevice],
-) -> dict[str, UnifiDevice]:
+def _richness(device: UnifiDevice) -> int:
+    """Count non-None fields on a device, excluding identity/services."""
+    return sum(
+        1
+        for f in device.__dataclass_fields__
+        if f not in _MERGE_SKIP and getattr(device, f) is not None
+    )
+
+
+def _deduplicate_by_mac(response_list: dict[str, UnifiDevice]) -> None:
     """
-    Deduplicate devices that share the same hw_addr.
+    Collapse VLAN duplicates (same hw_addr) into the richest entry.
 
     Consoles respond from every VLAN interface, creating multiple entries
-    with the same MAC but different source IPs. We keep the entry with the
-    richest data (most non-None fields) and merge the others into it.
-    Devices without hw_addr are always kept as-is.
+    with the same MAC but different source IPs. The entry with the most
+    populated fields wins; the rest are merged into it and removed.
+    Devices without hw_addr are left alone.
     """
-    # Group IPs by hw_addr
     mac_to_ips: dict[str, list[str]] = {}
     for ip, device in response_list.items():
         if device.hw_addr is not None:
             mac_to_ips.setdefault(device.hw_addr, []).append(ip)
 
-    # Nothing to deduplicate
-    if all(len(ips) <= 1 for ips in mac_to_ips.values()):
-        return response_list
-
-    to_remove: set[str] = set()
-    for mac, ips in mac_to_ips.items():
+    for ips in mac_to_ips.values():
         if len(ips) <= 1:
             continue
-
-        # Pick the entry with the most populated fields as the primary
-        def _richness(ip: str) -> int:
-            d = response_list[ip]
-            return sum(
-                1
-                for f in d.__dataclass_fields__
-                if f not in ("source_ip", "services") and getattr(d, f) is not None
-            )
-
-        ips.sort(key=_richness, reverse=True)
-        primary_ip = ips[0]
+        ips.sort(key=lambda ip: _richness(response_list[ip]), reverse=True)
+        primary_ip, *dup_ips = ips
         primary = response_list[primary_ip]
-
-        # Merge services from duplicates (take True over False)
-        merged_services = dict(primary.services)
-        for dup_ip in ips[1:]:
-            dup = response_list[dup_ip]
-            primary = _merge_devices(primary, dup)
-            for svc, available in dup.services.items():
-                if available:
-                    merged_services[svc] = True
-            to_remove.add(dup_ip)
-
-        response_list[primary_ip] = replace(primary, services=merged_services)
-
-    for ip in to_remove:
-        del response_list[ip]
-
-    return response_list
+        for dup_ip in dup_ips:
+            primary = _merge_devices(primary, response_list.pop(dup_ip))
+        response_list[primary_ip] = primary
 
 
 async def async_console_is_alive(session: ClientSession, target_ip: str) -> bool:
@@ -342,7 +323,8 @@ def parse_ubnt_response(
         field_name, field_parser, is_many = field_parsers[field_type]
         try:
             value = field_parser(field_data)  # type: ignore
-        except Exception:
+        except Exception as err:
+            _LOGGER.debug("Field parser failed: %s", err)
             continue
         if is_many:
             if field_name not in fields:
@@ -381,7 +363,9 @@ def create_multicast_socket(discovery_port: int) -> socket.socket:
     except OSError as err:
         _LOGGER.debug("Multicast port %s is not available: %s", discovery_port, err)
         sock.bind(("", 0))
-    mreq = socket.inet_aton(MULTICAST_IP) + socket.inet_aton("0.0.0.0")
+    # INADDR_ANY is required here to join the multicast group on any interface;
+    # this is not a listening bind.
+    mreq = socket.inet_aton(MULTICAST_IP) + socket.inet_aton("0.0.0.0")  # noqa: S104
     try:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     except OSError as err:
@@ -773,9 +757,11 @@ class AIOUnifiScanner:
 
         def _on_response(data: bytes, addr: tuple[str, int]) -> None:
             _LOGGER.debug("discover: %s <= %s", addr, data)
-            if self._process_response(data, addr, address, response_list):
-                if not found_all_future.done():
-                    found_all_future.set_result(True)
+            if (
+                self._process_response(data, addr, address, response_list)
+                and not found_all_future.done()
+            ):
+                found_all_future.set_result(True)
 
         loop = asyncio.get_running_loop()
 
