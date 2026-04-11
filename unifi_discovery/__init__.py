@@ -504,23 +504,31 @@ class ArpSearch:
         return neighbours
 
 
-# Module-level scan cache and lock for deduplication across instances
-_scan_cache: tuple[float, list[UnifiDevice]] | None = None
-_scan_lock: asyncio.Lock | None = None
-_scan_lock_loop: asyncio.AbstractEventLoop | None = None
+class _ScanCacheState:
+    """Process-wide broadcast-scan cache shared across AIOUnifiScanner instances."""
+
+    def __init__(self) -> None:
+        self.cache: tuple[float, list[UnifiDevice]] | None = None
+        self.lock: asyncio.Lock | None = None
+        self.lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        """Return the lock for the running loop, resetting cache on loop change."""
+        loop = asyncio.get_running_loop()
+        if self.lock is None or self.lock_loop is not loop:
+            # New loop — drop the cache alongside the lock so we never serve
+            # results captured under a different loop.
+            self.lock = asyncio.Lock()
+            self.lock_loop = loop
+            self.cache = None
+        return self.lock
+
+    def clear(self) -> None:
+        """Drop any cached scan results."""
+        self.cache = None
 
 
-def _get_scan_lock() -> asyncio.Lock:
-    """Get or create the module-level scan lock for the current event loop."""
-    global _scan_lock, _scan_lock_loop, _scan_cache  # noqa: PLW0603
-    loop = asyncio.get_running_loop()
-    if _scan_lock is None or _scan_lock_loop is not loop:
-        # New loop — drop the cache alongside the lock so we never serve
-        # results captured under a different loop.
-        _scan_lock = asyncio.Lock()
-        _scan_lock_loop = loop
-        _scan_cache = None
-    return _scan_lock
+_scan_state = _ScanCacheState()
 
 
 def _copy_devices(devices: list[UnifiDevice]) -> list[UnifiDevice]:
@@ -530,8 +538,7 @@ def _copy_devices(devices: list[UnifiDevice]) -> list[UnifiDevice]:
 
 def async_clear_cache() -> None:
     """Clear the scan result cache."""
-    global _scan_cache  # noqa: PLW0603
-    _scan_cache = None
+    _scan_state.clear()
 
 
 def _is_console(device: UnifiDevice) -> bool:
@@ -763,30 +770,27 @@ class AIOUnifiScanner:
             self.found_devices = _filter_devices(result, consoles_only)
             return self.found_devices
 
-        global _scan_cache  # noqa: PLW0603
-        # Fetch the lock first — this also resets _scan_cache if the running
+        # Fetch the lock first — this also resets the cache if the running
         # event loop has changed since the cache was populated.
-        lock = _get_scan_lock()
-        now = time.monotonic()
-
-        # Return cached results if still fresh
-        if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
+        lock = _scan_state.get_lock()
+        cached = _scan_state.cache
+        if cached is not None and time.monotonic() - cached[0] < SCAN_CACHE_TTL:
             self.found_devices = _filter_devices(
-                _copy_devices(_scan_cache[1]), consoles_only
+                _copy_devices(cached[1]), consoles_only
             )
             return self.found_devices
 
         async with lock:
             # Re-check after acquiring lock (another caller may have filled cache)
-            now = time.monotonic()
-            if _scan_cache is not None and now - _scan_cache[0] < SCAN_CACHE_TTL:
+            cached = _scan_state.cache
+            if cached is not None and time.monotonic() - cached[0] < SCAN_CACHE_TTL:
                 self.found_devices = _filter_devices(
-                    _copy_devices(_scan_cache[1]), consoles_only
+                    _copy_devices(cached[1]), consoles_only
                 )
                 return self.found_devices
 
             result = await self._async_do_scan(timeout, address)
-            _scan_cache = (time.monotonic(), result)
+            _scan_state.cache = (time.monotonic(), result)
             self.found_devices = _filter_devices(_copy_devices(result), consoles_only)
             return self.found_devices
 

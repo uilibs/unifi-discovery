@@ -544,7 +544,7 @@ async def test_async_scan_short_timeout_bypasses_cache_and_warns(
     await task
 
     # Cache must be empty — short scan should not populate it.
-    assert unifi_discovery._scan_cache is None
+    assert unifi_discovery._scan_state.cache is None
     # And the user must have been warned.
     assert any(
         "SCAN_CACHE_MIN_TIMEOUT" in rec.message and rec.levelname == "WARNING"
