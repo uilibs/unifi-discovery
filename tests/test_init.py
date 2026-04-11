@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import socket
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ from unifi_discovery import (
     _merge_devices,
     async_clear_cache,
     async_console_is_alive,
+    create_multicast_socket,
     create_udp_socket,
     parse_ubnt_response,
 )
@@ -939,6 +941,145 @@ def test_deduplicate_by_mac_no_hwaddr():
     assert len(response_list) == 2
 
 
+def test_create_multicast_socket_bind_fallback(monkeypatch) -> None:
+    """If binding to the discovery port fails, fall back to an ephemeral port."""
+    real_bind = socket.socket.bind
+    bind_calls: list[tuple] = []
+
+    def flaky_bind(self, address):
+        bind_calls.append(address)
+        if len(bind_calls) == 1:
+            raise OSError("address in use")
+        return real_bind(self, address)
+
+    monkeypatch.setattr(socket.socket, "bind", flaky_bind)
+
+    sock = create_multicast_socket(12345)
+    try:
+        assert len(bind_calls) == 2
+        assert bind_calls[0] == ("", 12345)
+        assert bind_calls[1] == ("", 0)
+    finally:
+        sock.close()
+
+
+def test_create_multicast_socket_join_group_failure_is_logged(monkeypatch) -> None:
+    """IP_ADD_MEMBERSHIP failure is swallowed so the sock is still returned."""
+    real_setsockopt = socket.socket.setsockopt
+
+    def flaky_setsockopt(self, level, optname, value):
+        if level == socket.IPPROTO_IP and optname == socket.IP_ADD_MEMBERSHIP:
+            raise OSError("no route to multicast group")
+        return real_setsockopt(self, level, optname, value)
+
+    monkeypatch.setattr(socket.socket, "setsockopt", flaky_setsockopt)
+
+    sock = create_multicast_socket(0)
+    try:
+        # Sock is still returned and non-blocking even though the join failed.
+        assert sock.getblocking() is False
+    finally:
+        sock.close()
+
+
+@pytest.mark.asyncio
+async def test_async_do_scan_skips_when_multicast_sock_fails(
+    mock_discovery_aio_protocol, mock_aioresponse, monkeypatch
+) -> None:
+    """create_multicast_socket raising OSError must be logged and skipped."""
+
+    def raise_oserror(port: int):
+        raise OSError("no multicast")
+
+    monkeypatch.setattr("unifi_discovery.create_multicast_socket", raise_oserror)
+
+    scanner = AIOUnifiScanner()
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_V1_REQUEST,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+    result = await task
+    # Primary scan still succeeded despite multicast sock failing.
+    assert len(result) == 1
+    assert result[0].source_ip == "192.168.203.1"
+
+
+@pytest.mark.asyncio
+async def test_async_do_scan_closes_mcast_sock_on_endpoint_failure(
+    mock_discovery_aio_protocol, mock_aioresponse, monkeypatch
+) -> None:
+    """
+    When multicast sock creation succeeds but create_datagram_endpoint for the
+    multicast path raises, we must close the mcast sock and continue with just
+    the unicast transport.
+    """
+
+    class TrackedSock:
+        """Wrap a real socket so we can observe close()."""
+
+        def __init__(self, real):
+            self._real = real
+            self.close_count = 0
+
+        def close(self):
+            self.close_count += 1
+            self._real.close()
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    tracked = {"sock": None}
+
+    real_create_mcast = unifi_discovery.create_multicast_socket
+
+    def tracked_mcast(port: int):
+        wrapper = TrackedSock(real_create_mcast(0))
+        tracked["sock"] = wrapper
+        return wrapper
+
+    monkeypatch.setattr("unifi_discovery.create_multicast_socket", tracked_mcast)
+
+    loop = asyncio.get_running_loop()
+    real_endpoint = loop.create_datagram_endpoint
+    call_count = {"n": 0}
+
+    async def flaky_endpoint(*args, **kwargs):
+        call_count["n"] += 1
+        # First call = primary unicast endpoint (succeed via fixture).
+        # Second call = multicast endpoint (fail).
+        if call_count["n"] == 2:
+            raise OSError("mcast endpoint failed")
+        return await real_endpoint(*args, **kwargs)
+
+    monkeypatch.setattr(loop, "create_datagram_endpoint", flaky_endpoint)
+
+    scanner = AIOUnifiScanner()
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_V1_REQUEST,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+    result = await task
+
+    # Scan still succeeds on the unicast path; the failed mcast sock is closed.
+    assert len(result) == 1
+    assert tracked["sock"] is not None
+    assert tracked["sock"].close_count >= 1, (
+        "multicast sock was not closed after endpoint failure"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_do_scan_closes_sock_on_endpoint_failure(monkeypatch):
     """Primary UDP socket FD is closed when create_datagram_endpoint raises."""
@@ -1005,6 +1146,114 @@ async def test_probe_releases_all_responses_when_processing_raises():
     assert "1.1.1.1/proxy/protect/api" in released
     assert "1.1.1.1/proxy/network/api" in released
     assert "1.1.1.1/api/system" in released
+
+
+@pytest.mark.asyncio
+async def test_probe_handles_system_json_content_type_error() -> None:
+    """A non-JSON /api/system response must be swallowed and keep the device."""
+
+    class JsonContentTypeErrorResponse:
+        status = 200
+
+        def release(self) -> None:
+            pass
+
+        async def json(self):
+            raise ContentTypeError(request_info=None, history=())
+
+    class Ok401Response:
+        status = 401
+
+        def release(self) -> None:
+            pass
+
+    class FakeSession:
+        def get(self, url: str, **kwargs):
+            async def _coro():
+                if url.endswith("/api/system"):
+                    return JsonContentTypeErrorResponse()
+                return Ok401Response()
+
+            return _coro()
+
+    scanner = AIOUnifiScanner()
+    response_list = {
+        "1.1.1.1": UnifiDevice(source_ip="1.1.1.1", echoed=True),
+    }
+    await scanner._probe_services_and_system_with_session(response_list, FakeSession())
+    # Device still present — the error path returns, it doesn't delete.
+    assert "1.1.1.1" in response_list
+    assert response_list["1.1.1.1"].services[UnifiService.Protect] is True
+
+
+@pytest.mark.asyncio
+async def test_probe_handles_system_client_error() -> None:
+    """ClientError on /api/system json() is swallowed."""
+
+    class ClientErrorResponse:
+        status = 200
+
+        def release(self) -> None:
+            pass
+
+        async def json(self):
+            raise ClientError("boom")
+
+    class Ok401Response:
+        status = 401
+
+        def release(self) -> None:
+            pass
+
+    class FakeSession:
+        def get(self, url: str, **kwargs):
+            async def _coro():
+                if url.endswith("/api/system"):
+                    return ClientErrorResponse()
+                return Ok401Response()
+
+            return _coro()
+
+    scanner = AIOUnifiScanner()
+    response_list = {
+        "1.1.1.1": UnifiDevice(source_ip="1.1.1.1", echoed=True),
+    }
+    await scanner._probe_services_and_system_with_session(response_list, FakeSession())
+    assert "1.1.1.1" in response_list
+    assert response_list["1.1.1.1"].services[UnifiService.Protect] is True
+
+
+@pytest.mark.asyncio
+async def test_async_scan_cache_hit_after_lock_acquire(monkeypatch) -> None:
+    """
+    Simulate another caller filling the cache while we waited for the lock.
+
+    The outer cache check misses (cache is None), but by the time we hold
+    the lock another scan has populated it — the post-lock re-check must
+    serve those cached results.
+    """
+    monkeypatch.setattr("unifi_discovery.SCAN_CACHE_MIN_TIMEOUT", 0)
+    unifi_discovery._scan_state.cache = None
+
+    cached_device = UnifiDevice(source_ip="9.9.9.9", echoed=True)
+
+    class PopulatingLock:
+        def __init__(self) -> None:
+            self._real = asyncio.Lock()
+
+        async def __aenter__(self):
+            await self._real.__aenter__()
+            # Fill the cache inside the critical section.
+            unifi_discovery._scan_state.cache = (time.monotonic(), [cached_device])
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return await self._real.__aexit__(exc_type, exc, tb)
+
+    monkeypatch.setattr(unifi_discovery._scan_state, "get_lock", PopulatingLock)
+
+    scanner = AIOUnifiScanner()
+    result = await scanner.async_scan(timeout=10)
+    assert result == [cached_device]
 
 
 def test_is_console_keeps_v1_echo_when_probes_fail():
