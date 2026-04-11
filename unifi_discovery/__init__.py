@@ -659,6 +659,58 @@ class AIOUnifiScanner:
         ) as session:
             await self._probe_services_and_system_with_session(response_list, session)
 
+    async def _apply_probe_result(
+        self,
+        source_ip: str,
+        result: _ProbeResult,
+        response_list: dict[str, UnifiDevice],
+    ) -> None:
+        """Fold one console's probe result back into response_list."""
+        services: dict[UnifiService, bool] = {}
+        for (service, _), response in zip(
+            SERVICE_ENDPOINTS, result.service_responses, strict=True
+        ):
+            if isinstance(response, BaseException):
+                if isinstance(response, asyncio.CancelledError):
+                    raise response
+                services[service] = False
+            else:
+                services[service] = response.status == HTTPStatus.UNAUTHORIZED
+                response.release()
+        response_list[source_ip] = replace(
+            response_list[source_ip], services=MappingProxyType(services)
+        )
+
+        system_response = result.system
+        if isinstance(system_response, BaseException):
+            if isinstance(system_response, asyncio.CancelledError):
+                raise system_response
+            return
+        try:
+            system = await system_response.json()
+        except ContentTypeError as ex:
+            _LOGGER.debug("System endpoint not available for %s: %s", source_ip, ex)
+            return
+        except (TimeoutError, ClientError):
+            _LOGGER.exception("Failed to get system info for %s", source_ip)
+            return
+        finally:
+            system_response.release()
+        if not system:
+            return
+        device = response_list[source_ip]
+        short_name = system.get("hardware", {}).get("shortname")
+        mac = system.get("mac")
+        response_list[source_ip] = replace(
+            device,
+            platform=device.platform or short_name,
+            hostname=device.hostname or (system.get("name") or "").replace(" ", "-"),
+            hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
+            direct_connect_domain=system.get("directConnectDomain"),
+            is_sso_enabled=system.get("isSsoEnabled"),
+            is_single_user=system.get("isSingleUser"),
+        )
+
     async def _probe_services_and_system_with_session(
         self, response_list: dict[str, UnifiDevice], session: ClientSession
     ) -> None:
@@ -683,51 +735,21 @@ class AIOUnifiScanner:
             return _ProbeResult(tuple(service_responses), system)
 
         all_results = await asyncio.gather(*(_probe_console(ip) for ip in console_ips))
-        for source_ip, result in zip(console_ips, all_results, strict=True):
-            services: dict[UnifiService, bool] = {}
-            for (service, _), response in zip(
-                SERVICE_ENDPOINTS, result.service_responses, strict=True
-            ):
-                if isinstance(response, BaseException):
-                    if isinstance(response, asyncio.CancelledError):
-                        raise response
-                    services[service] = False
-                else:
-                    services[service] = response.status == HTTPStatus.UNAUTHORIZED
-                    response.release()
-            response_list[source_ip] = replace(
-                response_list[source_ip], services=MappingProxyType(services)
-            )
-            system_response = result.system
-            if isinstance(system_response, BaseException):
-                if isinstance(system_response, asyncio.CancelledError):
-                    raise system_response
-                continue
-            try:
-                system = await system_response.json()
-            except ContentTypeError as ex:
-                _LOGGER.debug("System endpoint not available for %s: %s", source_ip, ex)
-                continue
-            except (TimeoutError, ClientError):
-                _LOGGER.exception("Failed to get system info for %s", source_ip)
-                continue
-            finally:
-                system_response.release()
-            if not system:
-                continue
-            device = response_list[source_ip]
-            short_name = system.get("hardware", {}).get("shortname")
-            mac = system.get("mac")
-            response_list[source_ip] = replace(
-                device,
-                platform=device.platform or short_name,
-                hostname=device.hostname
-                or (system.get("name") or "").replace(" ", "-"),
-                hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
-                direct_connect_domain=system.get("directConnectDomain"),
-                is_sso_enabled=system.get("isSsoEnabled"),
-                is_single_user=system.get("isSingleUser"),
-            )
+        # Collect every ClientResponse so we can guarantee release on any
+        # error path below. ClientResponse.release() is idempotent, so
+        # releasing again after the inline release() calls is safe.
+        all_responses: list[ClientResponse] = [
+            r
+            for result in all_results
+            for r in (*result.service_responses, result.system)
+            if not isinstance(r, BaseException)
+        ]
+        try:
+            for source_ip, result in zip(console_ips, all_results, strict=True):
+                await self._apply_probe_result(source_ip, result, response_list)
+        finally:
+            for response in all_responses:
+                response.release()
 
     async def async_scan(
         self,
@@ -803,13 +825,19 @@ class AIOUnifiScanner:
 
         loop = asyncio.get_running_loop()
 
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: UnifiDiscovery(
-                destination=destination,
-                on_response=_on_response,
-            ),
-            sock=sock,
-        )
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: UnifiDiscovery(
+                    destination=destination,
+                    on_response=_on_response,
+                ),
+                sock=sock,
+            )
+        except BaseException:
+            # create_datagram_endpoint only takes ownership of sock on success;
+            # close it ourselves on failure to avoid leaking the FD.
+            sock.close()
+            raise
 
         # Create multicast socket for discovering devices that only respond to multicast
         multicast_transport: asyncio.DatagramTransport | None = None

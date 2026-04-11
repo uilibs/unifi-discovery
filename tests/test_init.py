@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -925,3 +926,71 @@ def test_deduplicate_by_mac_no_hwaddr():
 
     # Both kept — can't deduplicate without MAC
     assert len(response_list) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_do_scan_closes_sock_on_endpoint_failure(monkeypatch):
+    """Primary UDP socket FD is closed when create_datagram_endpoint raises."""
+    mock_sock = MagicMock(spec=socket.socket)
+    monkeypatch.setattr("unifi_discovery.create_udp_socket", lambda port: mock_sock)
+
+    async def raise_endpoint(*args, **kwargs):
+        raise OSError("endpoint failed")
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "create_datagram_endpoint", raise_endpoint)
+
+    scanner = AIOUnifiScanner()
+    with pytest.raises(OSError, match="endpoint failed"):
+        await scanner.async_scan(timeout=0.01, address="192.168.1.1")
+
+    mock_sock.close.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_probe_releases_all_responses_when_processing_raises():
+    """Every gathered ClientResponse is released even if the loop raises mid-way."""
+    released: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, label: str, status: int = 404) -> None:
+            self.label = label
+            self.status = status
+
+        def release(self) -> None:
+            released.append(self.label)
+
+        async def json(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url: str, **kwargs):
+            async def _coro():
+                # Abort processing inside the first console's probe set so the
+                # second console's responses would leak without the finally.
+                if url == "https://1.1.1.1/proxy/access/api":
+                    raise asyncio.CancelledError()
+                return FakeResponse(url.split("//", 1)[1])
+
+            return _coro()
+
+    scanner = AIOUnifiScanner()
+    response_list = {
+        "1.1.1.1": UnifiDevice(source_ip="1.1.1.1", signature_version=None),
+        "2.2.2.2": UnifiDevice(source_ip="2.2.2.2", signature_version=None),
+    }
+
+    with pytest.raises(asyncio.CancelledError):
+        await scanner._probe_services_and_system_with_session(
+            response_list, FakeSession()
+        )
+
+    # Second console's responses must still have been released.
+    assert "2.2.2.2/proxy/protect/api" in released
+    assert "2.2.2.2/proxy/network/api" in released
+    assert "2.2.2.2/proxy/access/api" in released
+    assert "2.2.2.2/api/system" in released
+    # First console's non-raised responses are also released.
+    assert "1.1.1.1/proxy/protect/api" in released
+    assert "1.1.1.1/proxy/network/api" in released
+    assert "1.1.1.1/api/system" in released
