@@ -494,17 +494,19 @@ async def test_async_scan_caches_broadcast_results(
     scanner1 = AIOUnifiScanner()
     scanner2 = AIOUnifiScanner()
 
-    # First scan: set up protocol and send a discovery response
+    # Register HTTP mocks up front so the scan's probe phase cannot race
+    # against fixture setup.
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+
     task = asyncio.ensure_future(scanner1.async_scan(timeout=0.01))
     _, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         UBNT_V1_REQUEST,
         ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
     )
-    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
-    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
-    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
-    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
     result1 = await task
 
     # Second scan: should return cached results without new network activity
