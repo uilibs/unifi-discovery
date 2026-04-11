@@ -219,7 +219,7 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
     return replace(existing, **updates) if updates else existing
 
 
-def _richness(device: UnifiDevice) -> int:
+def _populated_field_count(device: UnifiDevice) -> int:
     """Count non-None fields on a device, excluding identity/services."""
     return sum(
         1
@@ -245,7 +245,7 @@ def _deduplicate_by_mac(response_list: dict[str, UnifiDevice]) -> None:
     for devices in mac_to_devices.values():
         if len(devices) <= 1:
             continue
-        devices.sort(key=_richness, reverse=True)
+        devices.sort(key=_populated_field_count, reverse=True)
         primary, *dups = devices
         for dup in dups:
             primary = _merge_devices(primary, dup)
