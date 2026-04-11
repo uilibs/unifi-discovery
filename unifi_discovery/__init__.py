@@ -5,7 +5,7 @@ import logging
 import re
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
@@ -66,6 +66,7 @@ IGNORE_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
 
 API_TIMEOUT = ClientTimeout(total=5.0)
 SCAN_CACHE_TTL = 300  # seconds to cache broadcast scan results
+SCAN_CACHE_MIN_TIMEOUT = 10  # scans shorter than this bypass the cache
 SYSTEM_API_ENDPOINT = "/api/system"
 PROTECT_API_ENDPOINT = "/proxy/protect/api"
 NETWORK_API_ENDPOINT = "/proxy/network/api"
@@ -143,9 +144,14 @@ FIELD_PARSERS_V2 = {
 }
 
 
-def _services_dict():
-    """Create an dict with known services."""
-    return dict.fromkeys(UnifiService, False)
+_EMPTY_SERVICES: Mapping[UnifiService, bool] = MappingProxyType(
+    dict.fromkeys(UnifiService, False)
+)
+
+
+def _services_dict() -> Mapping[UnifiService, bool]:
+    """Return the immutable default services mapping."""
+    return _EMPTY_SERVICES
 
 
 @dataclass(frozen=True)
@@ -163,7 +169,7 @@ class UnifiDevice:
     platform: str | None = None
     model: str | None = None
     signature_version: str | None = None
-    services: dict[UnifiService, bool] = field(default_factory=_services_dict)
+    services: Mapping[UnifiService, bool] = field(default_factory=_services_dict)
     direct_connect_domain: str | None = None
     is_sso_enabled: bool | None = None
     is_single_user: bool | None = None
@@ -324,7 +330,14 @@ def parse_ubnt_response(
         try:
             value = field_parser(field_data)  # type: ignore
         except Exception as err:
-            _LOGGER.debug("Field parser failed: %s", err)
+            _LOGGER.debug(
+                "Failed to parse field 0x%02x (%s) from %s: %s (data=%r)",
+                field_type,
+                field_name,
+                from_address,
+                err,
+                field_data,
+            )
             continue
         if is_many:
             if field_name not in fields:
@@ -487,11 +500,14 @@ _scan_lock_loop: asyncio.AbstractEventLoop | None = None
 
 def _get_scan_lock() -> asyncio.Lock:
     """Get or create the module-level scan lock for the current event loop."""
-    global _scan_lock, _scan_lock_loop  # noqa: PLW0603
+    global _scan_lock, _scan_lock_loop, _scan_cache  # noqa: PLW0603
     loop = asyncio.get_running_loop()
     if _scan_lock is None or _scan_lock_loop is not loop:
+        # New loop — drop the cache alongside the lock so we never serve
+        # results captured under a different loop.
         _scan_lock = asyncio.Lock()
         _scan_lock_loop = loop
+        _scan_cache = None
     return _scan_lock
 
 
@@ -667,7 +683,7 @@ class AIOUnifiScanner:
                     services[service] = response.status == HTTPStatus.UNAUTHORIZED
                     response.release()
             response_list[source_ip] = replace(
-                response_list[source_ip], services=services
+                response_list[source_ip], services=MappingProxyType(services)
             )
             system_response = result.system
             if isinstance(system_response, BaseException):
@@ -721,7 +737,24 @@ class AIOUnifiScanner:
             self.found_devices = _filter_devices(result, consoles_only)
             return self.found_devices
 
+        # Short scans bypass the cache so their incomplete results don't
+        # poison it for the TTL window.
+        if timeout < SCAN_CACHE_MIN_TIMEOUT:
+            _LOGGER.warning(
+                "async_scan called with timeout=%s; below SCAN_CACHE_MIN_TIMEOUT=%s, "
+                "bypassing cache. Short scans may miss devices — prefer timeout>=%s",
+                timeout,
+                SCAN_CACHE_MIN_TIMEOUT,
+                SCAN_CACHE_MIN_TIMEOUT,
+            )
+            result = await self._async_do_scan(timeout, address)
+            self.found_devices = _filter_devices(result, consoles_only)
+            return self.found_devices
+
         global _scan_cache  # noqa: PLW0603
+        # Fetch the lock first — this also resets _scan_cache if the running
+        # event loop has changed since the cache was populated.
+        lock = _get_scan_lock()
         now = time.monotonic()
 
         # Return cached results if still fresh
@@ -731,7 +764,6 @@ class AIOUnifiScanner:
             )
             return self.found_devices
 
-        lock = _get_scan_lock()
         async with lock:
             # Re-check after acquiring lock (another caller may have filled cache)
             now = time.monotonic()

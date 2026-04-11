@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest_asyncio
 from aiohttp import ClientError, ClientSession, ContentTypeError, TCPConnector
 from aioresponses import aioresponses
 
+import unifi_discovery
 from unifi_discovery import (
     DISCOVERY_PORT,
     UBNT_V1_REQUEST,
@@ -484,9 +486,11 @@ async def test_async_console_is_alive(mock_aioresponse):
 
 @pytest.mark.asyncio
 async def test_async_scan_caches_broadcast_results(
-    mock_discovery_aio_protocol, mock_aioresponse
+    mock_discovery_aio_protocol, mock_aioresponse, monkeypatch
 ):
     """Test that broadcast scans are cached and not repeated."""
+    # Drop the min-timeout threshold so the fast test scan is still cacheable.
+    monkeypatch.setattr("unifi_discovery.SCAN_CACHE_MIN_TIMEOUT", 0)
     scanner1 = AIOUnifiScanner()
     scanner2 = AIOUnifiScanner()
 
@@ -512,6 +516,38 @@ async def test_async_scan_caches_broadcast_results(
     # Mutating a cached device must raise since UnifiDevice is frozen
     with pytest.raises(AttributeError):
         result1[0].services = {}
+    # The services mapping itself must also be immutable
+    with pytest.raises(TypeError):
+        result1[0].services[UnifiService.Protect] = False
+
+
+@pytest.mark.asyncio
+async def test_async_scan_short_timeout_bypasses_cache_and_warns(
+    mock_discovery_aio_protocol, mock_aioresponse, caplog
+):
+    """Scans below SCAN_CACHE_MIN_TIMEOUT skip the cache and log a warning."""
+    scanner = AIOUnifiScanner()
+    caplog.set_level(logging.WARNING, logger="unifi_discovery")
+
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(
+        UBNT_V1_REQUEST,
+        ("192.168.203.1", CONSOLE_EPHEMERAL_PORT),
+    )
+    mock_aioresponse.get("https://192.168.203.1/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.1/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/proxy/access/api", status=404)
+    mock_aioresponse.get("https://192.168.203.1/api/system", status=404)
+    await task
+
+    # Cache must be empty — short scan should not populate it.
+    assert unifi_discovery._scan_cache is None
+    # And the user must have been warned.
+    assert any(
+        "SCAN_CACHE_MIN_TIMEOUT" in rec.message and rec.levelname == "WARNING"
+        for rec in caplog.records
+    )
 
 
 @pytest.mark.asyncio
