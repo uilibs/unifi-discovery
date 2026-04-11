@@ -5,7 +5,6 @@ import logging
 import re
 import socket
 import time
-import warnings
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -569,20 +568,15 @@ class _ScanCacheState:
 _scan_state = _ScanCacheState()
 
 
-def clear_cache() -> None:
-    """Clear the scan result cache."""
-    _scan_state.clear()
-
-
 def async_clear_cache() -> None:
-    """Deprecated alias for :func:`clear_cache` — the function is synchronous."""
-    warnings.warn(
-        "async_clear_cache is deprecated; use clear_cache instead "
-        "(the function is synchronous).",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    clear_cache()
+    """
+    Clear the scan result cache.
+
+    The ``async_`` prefix here follows this library's convention of marking
+    functions that are safe to call from within a running event loop — it
+    does not mean the function is a coroutine. No await is needed.
+    """
+    _scan_state.clear()
 
 
 _CONSOLE_SIGNATURE_VERSIONS = frozenset({"0", "2"})

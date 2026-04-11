@@ -23,7 +23,6 @@ from unifi_discovery import (
     _merge_devices,
     async_clear_cache,
     async_console_is_alive,
-    clear_cache,
     create_udp_socket,
     parse_ubnt_response,
 )
@@ -34,9 +33,9 @@ CONSOLE_EPHEMERAL_PORT = 44306
 @pytest.fixture(autouse=True)
 def _clear_scan_cache():
     """Clear the module-level scan cache between tests."""
-    clear_cache()
+    async_clear_cache()
     yield
-    clear_cache()
+    async_clear_cache()
 
 
 @pytest.fixture
@@ -1091,9 +1090,8 @@ def test_echo_then_v1_merge_preserves_echoed_bit() -> None:
     assert _filter_devices([merged], consoles_only=True) == [merged]
 
 
-def test_async_clear_cache_deprecated_alias_still_clears():
-    """async_clear_cache is deprecated but must still clear the cache."""
+def test_async_clear_cache_drops_cache() -> None:
+    """async_clear_cache clears the module-level scan cache."""
     unifi_discovery._scan_state.cache = (0.0, [])
-    with pytest.warns(DeprecationWarning, match="async_clear_cache is deprecated"):
-        async_clear_cache()
+    async_clear_cache()
     assert unifi_discovery._scan_state.cache is None
