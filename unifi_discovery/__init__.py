@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
+from struct import error as StructError
 from struct import unpack
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, cast
@@ -160,7 +161,7 @@ class UnifiDevice:
 
     source_ip: str
     hw_addr: str | None = None
-    ip_info: list[str] | None = None
+    ip_info: tuple[str, ...] | None = None
     addr_entry: str | None = None
     fw_version: str | None = None
     mac_address: str | None = None
@@ -195,7 +196,7 @@ def _merge_devices(existing: UnifiDevice, new: UnifiDevice) -> UnifiDevice:
         old_val = getattr(existing, f)
         new_val = getattr(new, f)
         if f == "ip_info" and old_val and new_val:
-            updates[f] = list(dict.fromkeys([*old_val, *new_val]))
+            updates[f] = tuple(dict.fromkeys([*old_val, *new_val]))
         elif old_val is None and new_val is not None:
             updates[f] = new_val
 
@@ -329,7 +330,7 @@ def parse_ubnt_response(
         field_name, field_parser, is_many = field_parsers[field_type]
         try:
             value = field_parser(field_data)  # type: ignore
-        except Exception as err:
+        except (ValueError, TypeError, UnicodeDecodeError, StructError) as err:
             _LOGGER.debug(
                 "Failed to parse field 0x%02x (%s) from %s: %s (data=%r)",
                 field_type,
@@ -347,9 +348,15 @@ def parse_ubnt_response(
         else:
             fields[field_name] = value
 
-    # Filter to only fields that exist on UnifiDevice
+    # Filter to only fields that exist on UnifiDevice and freeze ip_info to a tuple.
     valid = UnifiDevice.__dataclass_fields__
-    return UnifiDevice(**{k: v for k, v in fields.items() if k in valid})  # type: ignore
+    return UnifiDevice(  # type: ignore
+        **{
+            k: tuple(v) if k == "ip_info" else v
+            for k, v in fields.items()
+            if k in valid
+        }
+    )
 
 
 def create_udp_socket(discovery_port: int) -> socket.socket:
@@ -634,7 +641,7 @@ class AIOUnifiScanner:
                 response_list[source] = replace(
                     device,
                     hw_addr=neighbors[device.source_ip],
-                    ip_info=[f"{neighbors[device.source_ip]};{device.source_ip}"],
+                    ip_info=(f"{neighbors[device.source_ip]};{device.source_ip}",),
                 )
 
     async def _probe_services_and_system(

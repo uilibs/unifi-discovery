@@ -87,7 +87,7 @@ async def test_async_scanner_specific_address(
         UnifiDevice(
             source_ip="192.168.212.1",
             hw_addr="e0:63:da:00:5e:08",
-            ip_info=["e0:63:da:00:5e:08;192.168.212.1"],
+            ip_info=("e0:63:da:00:5e:08;192.168.212.1",),
             addr_entry=None,
             fw_version="UVC.S5L.v4.46.18.67.ceacbaa.211202.1017",
             mac_address=None,
@@ -163,7 +163,7 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
         UnifiDevice(
             source_ip="192.168.213.252",
             hw_addr="24:5a:4c:75:ba:e6",
-            ip_info=["24:5a:4c:75:ba:e6;192.168.213.47"],
+            ip_info=("24:5a:4c:75:ba:e6;192.168.213.47",),
             addr_entry="192.168.213.47",
             fw_version="UFP-UAP-B.MT7622_SOC.v0.4.0.4.340d302.220106.0349",
             mac_address="24:5a:4c:75:ba:e6",
@@ -239,7 +239,7 @@ async def test_async_scanner_no_system_response(
         UnifiDevice(
             source_ip="192.168.213.252",
             hw_addr="24:5a:4c:75:ba:e6",
-            ip_info=["24:5a:4c:75:ba:e6;192.168.213.47"],
+            ip_info=("24:5a:4c:75:ba:e6;192.168.213.47",),
             addr_entry="192.168.213.47",
             fw_version="UFP-UAP-B.MT7622_SOC.v0.4.0.4.340d302.220106.0349",
             mac_address="24:5a:4c:75:ba:e6",
@@ -786,7 +786,7 @@ def test_merge_devices():
     v1_device = UnifiDevice(
         source_ip="192.168.7.1",
         hw_addr="e0:63:da:00:5e:08",
-        ip_info=["e0:63:da:00:5e:08;192.168.7.1"],
+        ip_info=("e0:63:da:00:5e:08;192.168.7.1",),
         hostname="UDM",
         platform="UDMPROMAX",
         uptime=12345,
@@ -826,18 +826,18 @@ def test_merge_devices_ip_info_dedup():
     """Test that merging devices deduplicates ip_info entries."""
     d1 = UnifiDevice(
         source_ip="10.0.0.1",
-        ip_info=["aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.2"],
+        ip_info=("aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.2"),
     )
     d2 = UnifiDevice(
         source_ip="10.0.0.1",
-        ip_info=["aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.3"],
+        ip_info=("aa:bb:cc:dd:ee:ff;10.0.0.1", "aa:bb:cc:dd:ee:ff;10.0.0.3"),
     )
     merged = _merge_devices(d1, d2)
-    assert merged.ip_info == [
+    assert merged.ip_info == (
         "aa:bb:cc:dd:ee:ff;10.0.0.1",
         "aa:bb:cc:dd:ee:ff;10.0.0.2",
         "aa:bb:cc:dd:ee:ff;10.0.0.3",
-    ]
+    )
 
 
 def test_deduplicate_by_mac():
@@ -851,7 +851,7 @@ def test_deduplicate_by_mac():
             version="10.3.47",
             fw_version="7.0.0",
             signature_version="2",
-            ip_info=["58:d6:1f:3b:c1:f4;192.168.7.1"],
+            ip_info=("58:d6:1f:3b:c1:f4;192.168.7.1",),
             services={
                 UnifiService.Protect: True,
                 UnifiService.Network: True,
