@@ -13,7 +13,7 @@ from enum import Enum, auto
 from http import HTTPStatus
 from ipaddress import ip_address, ip_network
 from struct import error as StructError
-from struct import unpack
+from struct import pack, unpack
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, cast
 
@@ -57,9 +57,21 @@ IGNORE_NETWORKS = (
 )
 
 
-# UBNT discovery packet payload and reply signature
-UBNT_V1_REQUEST = b"\x01\x00\x00\x00"
-UBNT_V2_REQUEST = b"\x02\x08\x00\x00"  # version=2, command=8, data_len=0
+# UBNT discovery protocol versions observed on the wire.
+_PROTO_V0 = 0  # legacy response form (e.g. UNVR)
+_PROTO_V1 = 1  # classic broadcast discovery
+_PROTO_V2 = 2  # newer discovery format with product_name/version fields
+
+# UBNT discovery command numbers.
+_CMD_V1_DISCOVERY = 0  # V1 request and response
+_CMD_V2_REQUEST = 8  # V2 request
+_CMD_V2_RESPONSE_A = 6  # V2 response variant A
+_CMD_V2_RESPONSE_B = 9  # V2 response variant B
+
+# Discovery packet header format: version, command, data length (big-endian short).
+_UBNT_HEADER = ">BBH"
+UBNT_V1_REQUEST = pack(_UBNT_HEADER, _PROTO_V1, _CMD_V1_DISCOVERY, 0)
+UBNT_V2_REQUEST = pack(_UBNT_HEADER, _PROTO_V2, _CMD_V2_REQUEST, 0)
 DISCOVERY_PORT = 10001
 BROADCAST_FREQUENCY = 3
 ARP_CACHE_POPULATE_TIME = 10
@@ -112,46 +124,58 @@ def _fill_neighbor(neighbours, ip, mac):
     neighbours[ip] = mac
 
 
-# field type -> (field name; parsing function (bytes->str); \
-#                is it expected to be seen multiple times?)
-FIELD_PARSERS_V1 = {
-    0x01: ("hw_addr", mac_repr, False),
-    0x02: (
-        "ip_info",
-        lambda data: f"{mac_repr(data[0:6])};{ip_repr(data[6:10])}",
-        True,
-    ),
-    0x03: ("fw_version", bytes.decode, False),
-    0x04: ("addr_entry", ip_repr, False),
-    0x05: ("mac_address", mac_repr, False),
-    0x0A: ("uptime", lambda data: int.from_bytes(data, "big"), False),
-    0x0B: ("hostname", bytes.decode, False),
-    0x0C: ("platform", bytes.decode, False),
-    0x14: ("model", bytes.decode, False),
-}
-
-# V2/V0 responses use a different set of field IDs.
+# UBNT discovery field IDs.
+_FIELD_HW_ADDR = 0x01
+_FIELD_IP_INFO = 0x02
+_FIELD_FW_VERSION = 0x03
+_FIELD_ADDR_ENTRY = 0x04
+_FIELD_MAC_ADDRESS = 0x05
+_FIELD_UPTIME = 0x0A
+_FIELD_HOSTNAME = 0x0B
+_FIELD_PLATFORM = 0x0C
+_FIELD_MODEL = 0x14
+_FIELD_PRODUCT_NAME = 0x15
+_FIELD_VERSION = 0x16
 # Known protocol fields not mapped to UnifiDevice: 0x12 (seq), 0x13 (source_mac),
 # 0x17 (is_default). These are parsed by the device firmware but not exposed here.
+
+
+def _parse_ip_info(data: bytes) -> str:
+    return f"{mac_repr(data[0:6])};{ip_repr(data[6:10])}"
+
+
+def _parse_uptime(data: bytes) -> int:
+    return int.from_bytes(data, "big")
+
+
+# field id -> (attribute name, parser (bytes -> value), may-repeat)
+FIELD_PARSERS_V1 = {
+    _FIELD_HW_ADDR: ("hw_addr", mac_repr, False),
+    _FIELD_IP_INFO: ("ip_info", _parse_ip_info, True),
+    _FIELD_FW_VERSION: ("fw_version", bytes.decode, False),
+    _FIELD_ADDR_ENTRY: ("addr_entry", ip_repr, False),
+    _FIELD_MAC_ADDRESS: ("mac_address", mac_repr, False),
+    _FIELD_UPTIME: ("uptime", _parse_uptime, False),
+    _FIELD_HOSTNAME: ("hostname", bytes.decode, False),
+    _FIELD_PLATFORM: ("platform", bytes.decode, False),
+    _FIELD_MODEL: ("model", bytes.decode, False),
+}
+
 FIELD_PARSERS_V2 = {
-    0x01: ("hw_addr", mac_repr, False),
-    0x02: (
-        "ip_info",
-        lambda data: f"{mac_repr(data[0:6])};{ip_repr(data[6:10])}",
-        True,
-    ),
-    0x03: ("fw_version", bytes.decode, False),
-    0x15: ("product_name", bytes.decode, False),
-    0x16: ("version", bytes.decode, False),
+    _FIELD_HW_ADDR: ("hw_addr", mac_repr, False),
+    _FIELD_IP_INFO: ("ip_info", _parse_ip_info, True),
+    _FIELD_FW_VERSION: ("fw_version", bytes.decode, False),
+    _FIELD_PRODUCT_NAME: ("product_name", bytes.decode, False),
+    _FIELD_VERSION: ("version", bytes.decode, False),
 }
 
 # (version, command) → (signature label, field parser table).
 # v=0 is handled as a fallback at the call site because it accepts any
 # command but requires data_len > 0 (observed on e.g. UNVR).
 _PARSER_DISPATCH: dict[tuple[int, int], tuple[str, dict]] = {
-    (1, 0): ("1", FIELD_PARSERS_V1),
-    (2, 6): ("2", FIELD_PARSERS_V2),
-    (2, 9): ("2", FIELD_PARSERS_V2),
+    (_PROTO_V1, _CMD_V1_DISCOVERY): ("1", FIELD_PARSERS_V1),
+    (_PROTO_V2, _CMD_V2_RESPONSE_A): ("2", FIELD_PARSERS_V2),
+    (_PROTO_V2, _CMD_V2_RESPONSE_B): ("2", FIELD_PARSERS_V2),
 }
 
 
@@ -319,7 +343,7 @@ def parse_ubnt_response(
     # (version, command) → (signature label, field parsers).
     # v=0 is a fallback below: any command, requires data_len > 0 (e.g. UNVR).
     dispatch = _PARSER_DISPATCH.get((version, command))
-    if dispatch is None and version == 0 and data_len > 0:
+    if dispatch is None and version == _PROTO_V0 and data_len > 0:
         dispatch = ("0", FIELD_PARSERS_V2)
     if dispatch is None:
         return None
