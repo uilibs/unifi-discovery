@@ -175,10 +175,9 @@ def _parse_guid(data: bytes) -> str:
     # (cameras/APs/switches) reuse field id 0x2b for an unrelated 16-byte
     # binary blob, so require a valid UUID string and let anything else raise
     # (ValueError/UnicodeDecodeError) — the caller skips fields that fail to
-    # parse, so we never misinterpret a non-console payload as a guid.
-    text = data.decode()
-    UUID(text)
-    return text
+    # parse, so we never misinterpret a non-console payload as a guid. Return
+    # the canonical form so the same id in any representation compares equal.
+    return str(UUID(data.decode()))
 
 
 # field id -> (attribute name, parser (bytes -> value), may-repeat)

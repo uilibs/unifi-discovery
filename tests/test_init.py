@@ -195,6 +195,40 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
 
 
 @pytest.mark.asyncio
+async def test_async_scanner_direct_connect_domain_tlv_fallback(
+    mock_discovery_aio_protocol, mock_aioresponse
+):
+    """direct_connect_domain falls back to the discovery TLV when /api/system omits it."""
+    scanner = AIOUnifiScanner()
+    mock_aioresponse.get("https://192.168.203.5/proxy/protect/api", status=401)
+    mock_aioresponse.get("https://192.168.203.5/proxy/network/api", status=404)
+    mock_aioresponse.get("https://192.168.203.5/proxy/access/api", status=404)
+    mock_aioresponse.get(
+        "https://192.168.203.5/api/system",
+        payload={
+            "hardware": {"shortname": "UDMPROMAX"},
+            "name": "Console",
+            "mac": "aabbccddeeff",
+        },  # note: no directConnectDomain
+    )
+
+    # version (0x16) marks it a console so it gets probed; 0x30 carries the
+    # direct-connect domain that /api/system above omits.
+    payload = _v1_packet(
+        _tlv(0x01, bytes.fromhex("aabbccddeeff")),
+        _tlv(0x16, b"4.0.0"),
+        _tlv(0x30, b"fallback.id.ui.direct"),
+    )
+    task = asyncio.ensure_future(scanner.async_scan(timeout=0.01, consoles_only=False))
+    _, protocol = await mock_discovery_aio_protocol()
+    protocol.datagram_received(payload, ("192.168.203.5", DISCOVERY_PORT))
+    await task
+
+    assert len(scanner.found_devices) == 1
+    assert scanner.found_devices[0].direct_connect_domain == "fallback.id.ui.direct"
+
+
+@pytest.mark.asyncio
 async def test_async_scanner_no_system_response(
     mock_discovery_aio_protocol, mock_aioresponse
 ):
@@ -784,6 +818,17 @@ def test_parse_guid_rejects_non_console_binary():
     device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
     assert device is not None
     assert device.guid is None
+
+
+def test_parse_guid_normalizes_to_canonical():
+    """A guid in a non-canonical representation is normalized to canonical form."""
+    payload = _v1_packet(
+        _tlv(0x01, bytes.fromhex("aabbccddeeff")),
+        _tlv(0x2B, b"{12345678-1234-5678-1234-567812345678}"),
+    )
+    device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.guid == "12345678-1234-5678-1234-567812345678"
 
 
 def test_parse_v2_response():
