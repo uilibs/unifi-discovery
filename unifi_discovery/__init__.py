@@ -15,6 +15,7 @@ from struct import Struct
 from struct import error as StructError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, cast
+from uuid import UUID
 
 from aiohttp import (
     ClientError,
@@ -131,14 +132,21 @@ _FIELD_IP_INFO = 0x02
 _FIELD_FW_VERSION = 0x03
 _FIELD_ADDR_ENTRY = 0x04
 _FIELD_MAC_ADDRESS = 0x05
+_FIELD_NAME = 0x06
 _FIELD_UPTIME = 0x0A
 _FIELD_HOSTNAME = 0x0B
 _FIELD_PLATFORM = 0x0C
+_FIELD_SYSID = 0x10
 _FIELD_MODEL = 0x14
 _FIELD_PRODUCT_NAME = 0x15
 _FIELD_VERSION = 0x16
-# Known protocol fields not mapped to UnifiDevice: 0x12 (seq), 0x13 (source_mac),
-# 0x17 (is_default). These are parsed by the device firmware but not exposed here.
+_FIELD_IS_MANAGED = 0x17
+_FIELD_DEVICE_ID = 0x20
+_FIELD_GUID = 0x2B
+_FIELD_PRIMARY_ADDR = 0x2F
+_FIELD_DIRECT_CONNECT_DOMAIN = 0x30
+# Known protocol fields not mapped to UnifiDevice: 0x12 (seq), 0x13 (source_mac).
+# These are parsed by the device firmware but not exposed here.
 
 
 def _parse_ip_info(data: bytes) -> str:
@@ -147,6 +155,30 @@ def _parse_ip_info(data: bytes) -> str:
 
 def _parse_uptime(data: bytes) -> int:
     return int.from_bytes(data, "big")
+
+
+def _parse_sysid(data: bytes) -> int:
+    # 0x10 is a little-endian uint16 hardware/model id.
+    return int.from_bytes(data, "little")
+
+
+def _parse_is_managed(data: bytes) -> bool:
+    # 0x17 reflects the device's managed/adopted state. It is observed as a zero
+    # byte on set-up/adopted consoles (sent as 1 byte, or 4 bytes on some
+    # devices), so a zero value is treated as managed and any non-zero value as
+    # unmanaged/factory-default.
+    return int.from_bytes(data, "big") == 0
+
+
+def _parse_guid(data: bytes) -> str:
+    # On UniFi OS consoles 0x2b is a 36-char UUID string. Non-console devices
+    # (cameras/APs/switches) reuse field id 0x2b for an unrelated 16-byte
+    # binary blob, so require a valid UUID string and let anything else raise
+    # (ValueError/UnicodeDecodeError) — the caller skips fields that fail to
+    # parse, so we never misinterpret a non-console payload as a guid.
+    text = data.decode()
+    UUID(text)
+    return text
 
 
 # field id -> (attribute name, parser (bytes -> value), may-repeat)
@@ -160,12 +192,22 @@ FIELD_PARSERS = {
     _FIELD_FW_VERSION: ("fw_version", bytes.decode, False),
     _FIELD_ADDR_ENTRY: ("addr_entry", ip_repr, False),
     _FIELD_MAC_ADDRESS: ("mac_address", mac_repr, False),
+    # 0x06 is the human-facing display name on UniFi OS consoles (e.g. "Living
+    # Room"); 0x0b is its hostname-safe form ("Living-Room"). Cameras and APs
+    # omit 0x06.
+    _FIELD_NAME: ("name", bytes.decode, False),
     _FIELD_UPTIME: ("uptime", _parse_uptime, False),
     _FIELD_HOSTNAME: ("hostname", bytes.decode, False),
     _FIELD_PLATFORM: ("platform", bytes.decode, False),
+    _FIELD_SYSID: ("sysid", _parse_sysid, False),
     _FIELD_MODEL: ("model", bytes.decode, False),
     _FIELD_PRODUCT_NAME: ("product_name", bytes.decode, False),
     _FIELD_VERSION: ("version", bytes.decode, False),
+    _FIELD_IS_MANAGED: ("is_managed", _parse_is_managed, False),
+    _FIELD_DEVICE_ID: ("device_id", bytes.decode, False),
+    _FIELD_GUID: ("guid", _parse_guid, False),
+    _FIELD_PRIMARY_ADDR: ("primary_addr", _parse_ip_info, False),
+    _FIELD_DIRECT_CONNECT_DOMAIN: ("direct_connect_domain", bytes.decode, False),
 }
 
 # (version, command) → signature label. All dispatches use FIELD_PARSERS.
@@ -199,12 +241,21 @@ class UnifiDevice:
     fw_version: str | None = None
     mac_address: str | None = None
     uptime: int | None = None
+    name: str | None = None
     hostname: str | None = None
     platform: str | None = None
     model: str | None = None
+    sysid: int | None = None
     signature_version: str | None = None
     services: Mapping[UnifiService, bool] = field(default_factory=_services_dict)
     direct_connect_domain: str | None = None
+    # Stable per-device identifiers and adoption state (consoles populate these;
+    # cameras/APs only set a subset). guid is a console-only UUID; device_id is
+    # present on most devices; primary_addr is the canonical "mac;ip".
+    device_id: str | None = None
+    guid: str | None = None
+    primary_addr: str | None = None
+    is_managed: bool | None = None
     is_sso_enabled: bool | None = None
     is_single_user: bool | None = None
     product_name: str | None = None
@@ -770,7 +821,8 @@ class AIOUnifiScanner:
             platform=device.platform or short_name,
             hostname=device.hostname or (system.get("name") or "").replace(" ", "-"),
             hw_addr=device.hw_addr or (_format_mac(mac) if mac else None),
-            direct_connect_domain=system.get("directConnectDomain"),
+            direct_connect_domain=system.get("directConnectDomain")
+            or device.direct_connect_domain,
             is_sso_enabled=system.get("isSsoEnabled"),
             is_single_user=system.get("isSingleUser"),
         )

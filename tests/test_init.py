@@ -99,6 +99,9 @@ async def test_async_scanner_specific_address(
             hostname="Gate",
             platform="UVC G4 Pro",
             model=None,
+            sysid=42339,
+            device_id="32f695ba-835b-5822-bc54-e290e1789ff1",
+            is_managed=True,
             signature_version="1",
         )
     ]
@@ -176,6 +179,8 @@ async def test_async_scanner_broadcast(mock_discovery_aio_protocol, mock_aioresp
             hostname="AlexanderTechRoom",
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
+            sysid=8358,
+            is_managed=True,
             signature_version="1",
             services={
                 UnifiService.Protect: False,
@@ -253,6 +258,8 @@ async def test_async_scanner_no_system_response(
             hostname="AlexanderTechRoom",
             platform="UFP-UAP-B",
             model="Unifi-Protect-UAP-Bridge",
+            sysid=8358,
+            is_managed=True,
             signature_version="1",
             services={
                 UnifiService.Protect: False,
@@ -682,14 +689,14 @@ V0_RESPONSE = (
     b"v4.2.16"  # 0x16 version
 )
 
-# --- V2 response with unknown fields (seq, source_mac, is_default) ---
+# --- V2 response with unknown fields (seq, source_mac) ---
 V2_RESPONSE_WITH_EXTRA_FIELDS = (
     b"\x02\x06"  # version=2, command=6
     b"\x00\x1b"  # data_len=27
     b"\x01\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x01 hw_addr (9 bytes)
     b"\x12\x00\x02\x00\x01"  # 0x12 seq=1 (5 bytes)
     b"\x13\x00\x06\xe0\x63\xda\x00\x5e\x08"  # 0x13 source_mac (9 bytes)
-    b"\x17\x00\x01\x00"  # 0x17 is_default=False (4 bytes)
+    b"\x17\x00\x01\x00"  # 0x17 is_managed (wire 0 = managed)
 )
 
 
@@ -716,6 +723,67 @@ def test_parse_v1_response():
     assert device.signature_version == "1"
     assert device.product_name is None
     assert device.version is None
+    # Cameras/APs omit 0x06, so no display name is parsed.
+    assert device.name is None
+
+
+def test_parse_console_display_name():
+    """0x06 carries the console display name (consoles only; cameras omit it)."""
+    payload = (
+        b"\x01\x00\x001"  # V1 header, command 0, data_len 0x31
+        b"\x01\x00\x06\xaa\xbb\xcc\xdd\xee\xff"  # 0x01 hw_addr
+        b"\x06\x00\x0bLiving Room"  # 0x06 display name
+        b"\x0b\x00\x0bLiving-Room"  # 0x0b hostname (hostname-safe form)
+        b"\x0c\x00\tUDMPROMAX"  # 0x0c platform
+    )
+    device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.name == "Living Room"
+    assert device.hostname == "Living-Room"
+    assert device.platform == "UDMPROMAX"
+    assert device.signature_version == "1"
+
+
+def _tlv(field_id: int, value: bytes) -> bytes:
+    return bytes([field_id]) + len(value).to_bytes(2, "big") + value
+
+
+def _v1_packet(*tlvs: bytes) -> bytes:
+    body = b"".join(tlvs)
+    return b"\x01\x00" + len(body).to_bytes(2, "big") + body
+
+
+def test_parse_console_enrichment_fields():
+    """Console packets expose sysid, device_id, guid, primary_addr, is_managed, dcd."""
+    payload = _v1_packet(
+        _tlv(0x01, bytes.fromhex("aabbccddeeff")),
+        _tlv(0x06, b"Living Room"),
+        _tlv(0x10, (0x1234).to_bytes(2, "little")),  # sysid is little-endian uint16
+        _tlv(0x17, b"\x00"),  # is_managed True (wire 0 = adopted/managed)
+        _tlv(0x20, b"DEVICEID123"),
+        _tlv(0x2B, b"12345678-1234-5678-1234-567812345678"),
+        _tlv(0x2F, bytes.fromhex("aabbccddeeff") + bytes([192, 168, 1, 1])),
+        _tlv(0x30, b"example.id.ui.direct"),
+    )
+    device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.sysid == 0x1234
+    assert device.is_managed is True
+    assert device.device_id == "DEVICEID123"
+    assert device.guid == "12345678-1234-5678-1234-567812345678"
+    assert device.primary_addr == "aa:bb:cc:dd:ee:ff;192.168.1.1"
+    assert device.direct_connect_domain == "example.id.ui.direct"
+
+
+def test_parse_guid_rejects_non_console_binary():
+    """0x2b is a 16-byte binary blob on non-consoles — it must not become a guid."""
+    payload = _v1_packet(
+        _tlv(0x01, bytes.fromhex("aabbccddeeff")),
+        _tlv(0x2B, bytes(range(16))),  # 16 raw bytes, not a UUID string
+    )
+    device = parse_ubnt_response(payload, ("192.168.1.1", DISCOVERY_PORT))
+    assert device is not None
+    assert device.guid is None
 
 
 def test_parse_v2_response():
