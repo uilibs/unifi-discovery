@@ -548,10 +548,8 @@ class ArpSearch:
         try:
             out_data, _ = await asyncio.wait_for(arp.communicate(), ARP_TIMEOUT)
         except TimeoutError:
-            if arp:
-                with suppress(TypeError):
-                    await arp.kill()
-                del arp
+            arp.kill()
+            await arp.wait()
             return neighbours
         except AttributeError:
             return neighbours
