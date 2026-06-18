@@ -3,7 +3,7 @@ import contextlib
 import logging
 import socket
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -1457,3 +1457,22 @@ def test_async_clear_cache_drops_cache() -> None:
     unifi_discovery._scan_state.cache = (0.0, [])
     async_clear_cache()
     assert unifi_discovery._scan_state.cache is None
+
+
+@pytest.mark.asyncio
+async def test_arp_search_reaps_process_on_timeout():
+    """On arp timeout the child is killed and awaited, not left as a zombie."""
+    proc = MagicMock()
+    proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+
+    with patch(
+        "unifi_discovery.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=proc),
+    ):
+        result = await unifi_discovery.ArpSearch()._async_get_neighbors_arp()
+
+    assert result == {}
+    proc.kill.assert_called_once_with()
+    proc.wait.assert_awaited_once_with()
